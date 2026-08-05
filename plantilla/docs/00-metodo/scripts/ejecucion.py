@@ -18,8 +18,11 @@ import tempfile
 import uuid
 from pathlib import Path
 
+import control_plane
 import lease as gestion_leases
 import workspace_paths
+
+control_plane.redactar_salidas()
 
 
 RAIZ = Path(__file__).resolve().parents[3]

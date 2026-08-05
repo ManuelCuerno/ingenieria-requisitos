@@ -29,6 +29,10 @@ for _salida in (sys.stdout, sys.stderr):
     if hasattr(_salida, "reconfigure"):
         _salida.reconfigure(encoding="utf-8", errors="replace")
 
+import control_plane
+
+control_plane.redactar_salidas()
+
 
 RAIZ = Path(__file__).resolve().parents[3]
 PETICIONES = RAIZ / "docs/05-trabajo/peticiones"

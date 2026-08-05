@@ -103,6 +103,43 @@ def redact_secrets(value):
     return text
 
 
+class _SalidaRedactada:
+    """Envoltorio de un stream de texto que pasa todo lo escrito por redact_secrets.
+
+    Es el embudo único: con él instalado, ningún print de un script puede sacar
+    una credencial por consola aunque el texto venga de datos del usuario.
+    Redacta línea a línea (bufferiza la línea incompleta) para que los patrones
+    multi-token de redact_secrets vean unidades coherentes."""
+
+    def __init__(self, original):
+        self._original = original
+        self._pendiente = ""
+
+    def write(self, texto):
+        self._pendiente += str(texto)
+        *completas, self._pendiente = self._pendiente.split("\n")
+        for linea in completas:
+            self._original.write(redact_secrets(linea) + "\n")
+        return len(texto)
+
+    def flush(self):
+        if self._pendiente:
+            self._original.write(redact_secrets(self._pendiente))
+            self._pendiente = ""
+        self._original.flush()
+
+    def __getattr__(self, nombre):
+        return getattr(self._original, nombre)
+
+
+def redactar_salidas():
+    """Instala el redactor en stdout y stderr del proceso (idempotente)."""
+    for nombre in ("stdout", "stderr"):
+        actual = getattr(sys, nombre)
+        if not isinstance(actual, _SalidaRedactada):
+            setattr(sys, nombre, _SalidaRedactada(actual))
+
+
 def _slug(value, fallback="run"):
     normalized = re.sub(r"[^a-z0-9]+", "-", str(value).strip().lower()).strip("-")
     return normalized or fallback
