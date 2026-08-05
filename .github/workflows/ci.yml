@@ -23,6 +23,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - name: Identidad git del runner (los tests montan repos reales)
+        run: |
+          git config --global user.name "CI"
+          git config --global user.email "ci@invalid.local"
+        shell: bash
       - name: Suite del visor y del método
         run: python3 -m unittest discover -s visor/tests -p "test_*.py" -v
         shell: bash
