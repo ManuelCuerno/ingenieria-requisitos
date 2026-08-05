@@ -1,0 +1,448 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "ingenieria-requisitos/planos",
+  "title": "planos.json (v2): todo el proyecto como datos",
+  "description": "Única fuente estructurada del proyecto. En borrador puede crecer fase a fase; antes de revisión y congelación debe cumplir el perfil correspondiente de visor/validar.py. El diseño futuro se mantiene separado de la cobertura observada en el código. Los ids R-n, C-n, G-n, Q-n y REC-n son ÚNICOS EN TODO EL PROYECTO.",
+  "type": "object",
+  "required": ["version", "titulo"],
+  "additionalProperties": false,
+  "properties": {
+    "version": { "const": 2 },
+    "proyecto": { "type": "string", "description": "Slug del proyecto." },
+    "titulo": { "type": "string", "minLength": 1 },
+    "descripcion": { "type": "string", "description": "Dos o tres frases en palabras del usuario: qué es el negocio y qué se quiere construir. Es lo primero que enseña el visor." },
+    "definicion": {
+      "type": "object",
+      "required": ["estado", "modo"],
+      "additionalProperties": false,
+      "properties": {
+        "estado": { "enum": ["borrador", "listo para revisar", "aprobado", "congelado"] },
+        "modo": { "enum": ["entrevista", "autopropuesto", "analisis de codigo", "mixto"] },
+        "bloques_no_aplican": { "type": "array", "items": { "type": "string" } },
+        "supuestos": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "texto", "origen", "estado"],
+            "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "pattern": "^S-[0-9]+$" },
+              "texto": { "type": "string" },
+              "origen": { "$ref": "#/definitions/origen" },
+              "estado": { "enum": ["propuesto", "confirmado", "rechazado"] }
+            }
+          }
+        }
+      }
+    },
+    "cobertura": { "$ref": "#/definitions/implementacion" },
+    "contrato": {
+      "type": "object",
+      "required": ["frase"],
+      "additionalProperties": false,
+      "properties": {
+        "frase": { "type": "string", "description": "Cuando [situación], [quién] necesita [hacer qué] para [resultado medible]." },
+        "exito": {
+          "anyOf": [
+            { "type": "string" },
+            { "type": "array", "items": { "type": "string" } }
+          ],
+          "description": "El número (o números) que se mirarán para saber que funcionó. Varios objetivos = lista, no una frase comprimida."
+        }
+      }
+    },
+    "actores": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["nombre"], "additionalProperties": false,
+        "properties": {
+          "nombre": { "type": "string" },
+          "rol": { "type": "string" },
+          "organizacion": { "type": "string", "description": "Organización o tenant al que pertenece esta persona, si condiciona su acceso." },
+          "grupos": { "type": "array", "items": { "type": "string" }, "description": "Grupos estables que conceden permisos base; no codifican propiedad ni estado." },
+          "estado": { "type": "string", "description": "Estado relevante de la identidad, por ejemplo activa o suspendida." },
+          "miembros": { "type": "array", "items": { "type": "string" }, "description": "Para actores colectivos (las cafeterías, los técnicos): nombres de los miembros." }
+        }
+      }
+    },
+    "vocabulario": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["termino", "significado"], "additionalProperties": false,
+        "properties": { "termino": { "type": "string" }, "significado": { "type": "string" } }
+      }
+    },
+    "actividades": {
+      "type": "array",
+      "description": "Solo en el plano MAPA de una aplicación grande: el catálogo completo de actividades (cada una tendrá su propio planos.json en actividades/<id>/). El orden dentro de cada área es el orden de prioridad.",
+      "items": {
+        "type": "object", "required": ["id", "nombre", "area"], "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "nombre": { "type": "string", "description": "En verbo: 'hacer un pedido', 'emitir un certificado'." },
+          "area": { "type": "string", "description": "Zona del negocio que la agrupa: 'Pagos', 'Directos'..." },
+          "resumen": { "type": "string", "description": "Una línea: qué pasa en esta actividad." },
+          "estado": { "enum": ["sin empezar", "en entrevista", "especificada", "en obra", "entregada"] },
+          "origen": { "$ref": "#/definitions/origen" },
+          "cobertura": { "$ref": "#/definitions/implementacion" },
+          "depende_de": { "type": "array", "items": { "type": "string" }, "description": "Ids de actividades que tienen que existir antes." },
+          "carpeta": { "type": "string", "description": "actividades/<id>/ cuando su plano exista." }
+        }
+      }
+    },
+    "flujos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "titulo", "momento", "pasos"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "titulo": { "type": "string" },
+          "momento": { "enum": ["hoy", "futuro"] },
+          "origen": { "$ref": "#/definitions/origen" },
+          "descripcion": { "type": "string" },
+          "pasos": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/paso" } }
+        }
+      }
+    },
+    "episodios": {
+      "type": "array",
+      "description": "Los hechos reales con nombres y números que salieron en la entrevista (F2). Viajan al constructor: son la mejor munición para los tests.",
+      "items": {
+        "type": "object", "required": ["texto"], "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^EP-[0-9]+$" },
+          "texto": { "type": "string", "description": "El episodio con sus datos: 'el 14 de junio los Peña debían 210€ y aun así reservaron pista'." },
+          "refs": { "type": "array", "items": { "type": "string" }, "description": "Ids a los que alimenta: G-2, R-4, C-3..." }
+        }
+      }
+    },
+    "recorridos": {
+      "type": "array",
+      "description": "El orden del array ES el orden de entrega; el primero es el esqueleto (camino feliz de punta a punta).",
+      "items": {
+        "type": "object",
+        "required": ["id", "nombre"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^REC-[0-9]+$" },
+          "nombre": { "type": "string" },
+          "objetivo": { "type": "string" },
+          "flujos": { "type": "array", "items": { "type": "string" }, "description": "Ids de los flujos futuros que materializa este recorrido." },
+          "estado": { "enum": ["pendiente", "en construcción", "entregado"], "description": "Lo cambia el analista en modo C cuando el usuario confirma; el constructor no toca los planos." },
+          "requisitos": {
+            "type": "array",
+            "items": {
+              "type": "object", "required": ["id", "texto"], "additionalProperties": false,
+              "properties": {
+                "id": { "type": "string", "pattern": "^R-[0-9]+$" },
+                "texto": { "type": "string", "description": "EARS: Cuando [disparador], el sistema deberá [respuesta]." },
+                "regla": { "type": "string", "pattern": "^G-[0-9]+$", "description": "Regla de negocio que este requisito implementa, si la hay." },
+                "origen": { "$ref": "#/definitions/origen" },
+                "implementacion": { "$ref": "#/definitions/implementacion" }
+              }
+            }
+          },
+          "criterios": {
+            "type": "array",
+            "items": {
+              "type": "object", "required": ["id", "dado", "cuando", "entonces"], "additionalProperties": false,
+              "properties": {
+                "id": { "type": "string", "pattern": "^C-[0-9]+$" },
+                "tipo": { "enum": ["feliz", "denegacion"], "description": "Distingue una comprobación normal de una denegación de permisos. Obligatorio en el contrato E2E nuevo." },
+                "dado": { "type": "string" }, "cuando": { "type": "string" }, "entonces": { "type": "string" },
+                "cubre": { "type": "string", "pattern": "^R-[0-9]+$", "description": "Requisito que este criterio verifica." }
+              }
+            }
+          }
+        }
+      }
+    },
+    "reglas": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["id", "nombre"], "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^G-[0-9]+$" },
+          "nombre": { "type": "string" },
+          "texto": { "type": "string" },
+          "tabla": {
+            "type": "object", "required": ["columnas", "filas"], "additionalProperties": false,
+            "description": "Tabla de decisión: la última columna es qué pasa; las demás son condiciones. Cada fila debe tener tantas celdas como columnas. El comodín 'cualquier valor' se escribe '*'.",
+            "properties": {
+              "columnas": { "type": "array", "items": { "type": "string" } },
+              "filas": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } }
+            }
+          }
+        }
+      }
+    },
+    "estados": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["entidad", "estados"], "additionalProperties": false,
+        "properties": {
+          "entidad": { "type": "string" },
+          "estados": {
+            "type": "array",
+            "items": {
+              "type": "object", "required": ["nombre"], "additionalProperties": false,
+              "properties": {
+                "nombre": { "type": "string" },
+                "acciones": {
+                  "type": "array",
+                  "description": "Mejor como objetos: quién puede hacerla y a qué estado deja la cosa (pasa_a). Sin pasa_a, se queda en el mismo estado.",
+                  "items": {
+                    "anyOf": [
+                      { "type": "string" },
+                      {
+                        "type": "object", "required": ["accion"], "additionalProperties": false,
+                        "properties": {
+                          "accion": { "type": "string" },
+                          "quien": { "type": "string" },
+                          "pasa_a": { "type": "string" }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "datos": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["cosa"], "additionalProperties": false,
+        "properties": {
+          "cosa": { "type": "string" },
+          "guarda": { "type": "array", "items": { "type": "string" } },
+          "origen": { "type": "string", "description": "De dónde viene lo existente: el sistema actual, sea el que sea (un Excel, SAP, Holded, el banco, un Drive, la app de un tercero), o 'se empieza de cero'." }
+        }
+      }
+    },
+    "volumen": {
+      "type": "array",
+      "description": "Los números de escala de F2: cuántos usuarios, registros, frecuencias.",
+      "items": {
+        "type": "object", "required": ["que", "cuanto"], "additionalProperties": false,
+        "properties": { "que": { "type": "string" }, "cuanto": { "type": "string" } }
+      }
+    },
+    "integraciones": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["con"], "additionalProperties": false,
+        "properties": { "con": { "type": "string" }, "para": { "type": "string" } }
+      }
+    },
+    "superficie": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "puntos": {
+          "type": "array",
+          "description": "La ficha completa lleva SIEMPRE los 7 campos (validar.py avisa de fichas cojas). En puntos que no son pantallas, 've' significa 'qué recibe'.",
+          "items": {
+            "type": "object", "required": ["nombre"], "additionalProperties": false,
+            "properties": {
+              "id": { "type": "string", "pattern": "^SUP-[0-9]+$" },
+              "nombre": { "type": "string" },
+              "quien": { "type": "array", "items": { "type": "string" } },
+              "llega": { "type": "string" },
+              "cuando": { "type": "string" },
+              "ve": { "type": "string" },
+              "puede": { "type": "array", "items": { "type": "string" } },
+              "nunca": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    { "type": "string" },
+                    {
+                      "type": "object",
+                      "required": ["accion", "requisito", "criterio"],
+                      "additionalProperties": false,
+                      "properties": {
+                        "accion": { "type": "string" },
+                        "requisito": { "type": "string", "pattern": "^R-[0-9]+$" },
+                        "criterio": { "type": "string", "pattern": "^C-[0-9]+$" }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "permisos": {
+          "type": "object", "required": ["acciones", "roles"], "additionalProperties": false,
+          "properties": {
+            "acciones": { "type": "array", "items": { "type": "string" } },
+            "roles": {
+              "type": "array",
+              "items": {
+                "type": "object", "required": ["rol", "permitidas"], "additionalProperties": false,
+                "properties": {
+                  "rol": { "type": "string" },
+                  "permitidas": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            },
+            "grupos": {
+              "type": "array",
+              "items": {
+                "type": "object", "required": ["grupo", "permitidas"], "additionalProperties": false,
+                "properties": {
+                  "grupo": { "type": "string" },
+                  "permitidas": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            },
+            "restricciones": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["id", "accion", "recurso", "requisito", "criterio"],
+                "oneOf": [
+                  { "required": ["rol"] },
+                  { "required": ["grupo"] }
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "id": { "type": "string", "pattern": "^P-[0-9]+$" },
+                  "rol": { "type": "string" },
+                  "grupo": { "type": "string" },
+                  "accion": { "type": "string" },
+                  "recurso": { "type": "string" },
+                  "alcance": { "type": "string" },
+                  "condicion": { "type": "string" },
+                  "requisito": { "type": "string", "pattern": "^R-[0-9]+$" },
+                  "criterio": { "type": "string", "pattern": "^C-[0-9]+$" }
+                }
+              }
+            }
+          }
+        },
+        "avisos": {
+          "type": "array",
+          "items": {
+            "type": "object", "required": ["quien", "que"], "additionalProperties": false,
+            "properties": {
+              "quien": { "type": "string" }, "que": { "type": "string" },
+              "canal": { "type": "string", "description": "Obligatorio en la práctica: validar.py avisa si falta." },
+              "cuando": { "type": "string" }
+            }
+          }
+        },
+        "condiciones": { "type": "array", "items": { "type": "string" }, "description": "Relato de las condiciones de uso. Su versión comprobable son los Q-n de calidad: si divergen, manda el Q-n." }
+      }
+    },
+    "pruebas_e2e": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "tipo", "criterios", "personas", "fronteras"],
+        "oneOf": [
+          { "properties": { "tipo": { "const": "camino_feliz" } } },
+          { "required": ["restricciones"], "properties": { "tipo": { "const": "denegacion" } } }
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^E2E-[0-9]+$" },
+          "tipo": { "enum": ["camino_feliz", "denegacion"] },
+          "criterios": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^C-[0-9]+$" } },
+          "personas": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "fronteras": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+          "restricciones": { "type": "array", "minItems": 1, "items": { "type": "string", "pattern": "^P-[0-9]+$" } }
+        }
+      }
+    },
+    "calidad": {
+      "type": "array",
+      "items": {
+        "type": "object", "required": ["id", "criterio"], "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^Q-[0-9]+$" },
+          "criterio": { "type": "string", "description": "Comprobable: condición + umbral." }
+        }
+      }
+    },
+    "fuera": { "type": "array", "items": { "type": "string" } },
+    "preguntas": { "type": "array", "items": { "type": "string" } }
+  },
+  "definitions": {
+    "origen": {
+      "enum": ["usuario", "codigo", "inferido", "mixto"],
+      "description": "De dónde procede esta afirmación. El código describe el estado actual; el usuario manda sobre el diseño futuro."
+    },
+    "evidencia": {
+      "type": "object",
+      "required": ["tipo", "referencia"],
+      "additionalProperties": false,
+      "properties": {
+        "tipo": { "enum": ["codigo", "test", "documentacion", "ejecucion", "usuario"] },
+        "referencia": { "type": "string" },
+        "detalle": { "type": "string" }
+      }
+    },
+    "implementacion": {
+      "type": "object",
+      "required": ["estado"],
+      "additionalProperties": false,
+      "properties": {
+        "estado": { "enum": ["no verificado", "implementado", "parcial", "no implementado", "contradice"] },
+        "evidencias": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              { "type": "string" },
+              { "$ref": "#/definitions/evidencia" }
+            ]
+          }
+        },
+        "pruebas": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "paso": {
+      "oneOf": [
+        { "$ref": "#/definitions/accion" },
+        { "$ref": "#/definitions/decision" }
+      ]
+    },
+    "accion": {
+      "type": "object", "required": ["tipo", "texto"], "additionalProperties": false,
+      "properties": {
+        "tipo": { "enum": ["humano", "estatico", "ia", "externo"], "description": "externo = lo hace un tercero fuera de la app (el banco, la gestora)." },
+        "texto": { "type": "string", "minLength": 1 },
+        "quien": { "type": "string" }
+      }
+    },
+    "rama": {
+      "type": "object", "required": ["etiqueta", "pasos"], "additionalProperties": false,
+      "properties": {
+        "etiqueta": { "type": "string", "minLength": 1, "description": "Cuándo se entra: 'sí, debía dinero'." },
+        "pasos": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/paso" } },
+        "termina": { "type": "boolean", "description": "true = este camino TERMINA aquí (anulación, baja); no vuelve al flujo." }
+      }
+    },
+    "decision": {
+      "type": "object",
+      "required": ["tipo", "clase", "condicion"],
+      "additionalProperties": false,
+      "oneOf": [ { "required": ["rama"] }, { "required": ["ramas"] } ],
+      "properties": {
+        "tipo": { "const": "decision" },
+        "clase": { "enum": ["regla", "excepcion"] },
+        "condicion": { "type": "string", "minLength": 1, "description": "La pregunta, con sus signos: '¿el cliente debía dinero?'." },
+        "quien": { "type": "string", "description": "Quién evalúa la condición, si la decide una persona." },
+        "rama": { "$ref": "#/definitions/rama" },
+        "ramas": { "type": "array", "minItems": 1, "items": { "$ref": "#/definitions/rama" }, "description": "Varias salidas con contenido; el camino principal sigue siendo el de 'sigue'." },
+        "sigue": { "type": "string", "description": "Etiqueta del camino normal: 'no debía nada'." }
+      }
+    }
+  }
+}

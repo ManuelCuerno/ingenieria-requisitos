@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *"
+
+jobs:
+  tests:
+    name: Tests (${{ matrix.os }} · py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    # Windows no bloquea hasta cerrar la portabilidad (S2.6): quitar cuando pase.
+    continue-on-error: ${{ matrix.os == 'windows-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Suite del visor y del método
+        run: python3 -m unittest discover -s visor/tests -p "test_*.py" -v
+        shell: bash
+      - name: Validación del ejemplo del visor
+        run: python3 visor/validar.py --datos visor/ejemplo.json
+        shell: bash
+
+  nightly:
+    name: Adversarial (nightly)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python3 -m unittest discover -s visor/tests/nightly -p "test_*.py" -v

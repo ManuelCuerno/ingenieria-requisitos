@@ -1,0 +1,797 @@
+import importlib.util
+import base64
+import hashlib
+import json
+import os
+import re
+import select
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+import uuid
+from pathlib import Path
+
+
+RAIZ = Path(__file__).resolve().parents[2]
+BOOTSTRAP = RAIZ / "visor/bootstrap.py"
+ACTUALIZAR = RAIZ / "visor/actualizar.py"
+PROYECTOS = RAIZ / "visor/proyectos.py"
+
+
+class PeticionBootstrapActualizarTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="peticion-distribucion-")
+        self.addCleanup(self.tmp.cleanup)
+        self.base = Path(self.tmp.name)
+        self.entorno = dict(os.environ)
+        self.entorno["INGENIERIA_REQUISITOS_REGISTRO"] = str(
+            self.base / "registro-suite.json"
+        )
+
+    def ejecutar(self, script, *args):
+        return subprocess.run(
+            [sys.executable, str(script), *args],
+            cwd=RAIZ,
+            text=True,
+            capture_output=True,
+            env=self.entorno,
+        )
+
+    def proceso_actualizar_con_failpoint(self, nombre, ws):
+        ready_read, ready_write = os.pipe()
+        wait_read, wait_write = os.pipe()
+        env = os.environ.copy()
+        prefijo = f"IR_FAILPOINT_{nombre.upper()}"
+        env[f"{prefijo}_READY_FD"] = str(ready_write)
+        env[f"{prefijo}_WAIT_FD"] = str(wait_read)
+        env["IR_SESSION_ID"] = f"modo-d-{uuid.uuid4()}"
+        proceso = subprocess.Popen(
+            [sys.executable, str(ACTUALIZAR), "aplicar", str(ws)],
+            cwd=RAIZ,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            pass_fds=(ready_write, wait_read),
+        )
+        os.close(ready_write)
+        os.close(wait_read)
+        self.addCleanup(lambda: proceso.poll() is None and proceso.kill())
+        return proceso, ready_read, wait_write
+
+    def esperar_barrera(self, descriptor):
+        legibles, _, _ = select.select([descriptor], [], [], 3)
+        self.assertEqual(legibles, [descriptor], "Modo D no alcanzó el failpoint")
+        self.assertEqual(os.read(descriptor, 1), b"1")
+        os.close(descriptor)
+
+    def entrada_journal(self, contenido, modo=0o644):
+        return {
+            "contenido": base64.b64encode(contenido).decode("ascii"),
+            "modo": modo,
+            "sha256": hashlib.sha256(contenido).hexdigest(),
+        }
+
+    def escribir_journal(self, ws, snapshot, *, published=None, fase="escribiendo", **extra):
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+            capture_output=True, check=True,
+        ).stdout.strip()
+        datos = {
+            "formato": 2,
+            "operacion": "modo-d",
+            "id": str(uuid.uuid4()),
+            "fase": fase,
+            "punto_retorno": head,
+            "snapshot": snapshot,
+            "publicado": published if published is not None else snapshot,
+            "arbol_publicado": None,
+            "commit": None,
+        }
+        datos.update(extra)
+        journal = ws / ".runtime/transactions/modo-d.json"
+        journal.parent.mkdir(parents=True, exist_ok=True)
+        journal.write_text(json.dumps(datos), encoding="utf-8")
+        return journal
+
+    def planos_minimos(self):
+        proyecto = self.base / "planos"
+        (proyecto / "especificaciones/01-constitution").mkdir(parents=True)
+        (proyecto / "especificaciones/02-flows").mkdir()
+        (proyecto / "planos.json").write_text(
+            json.dumps(
+                {
+                    "version": 2,
+                    "proyecto": "demo",
+                    "titulo": "Demo",
+                    "contrato": {"frase": "Una demostración"},
+                    "actividades": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (proyecto / "especificaciones/01-constitution/constitution.md").write_text(
+            "# Constitución\n", encoding="utf-8"
+        )
+        return proyecto
+
+    def test_bootstrap_publica_peticiones_y_nace_estricto(self):
+        destino = self.base / "demo-agents"
+
+        resultado = self.ejecutar(
+            BOOTSTRAP,
+            "--planos",
+            str(self.planos_minimos()),
+            "--destino",
+            str(destino),
+        )
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertTrue((destino / "docs/00-metodo/scripts/peticion.py").is_file())
+        self.assertTrue((destino / "docs/00-metodo/scripts/lease.py").is_file())
+        self.assertTrue((destino / "docs/00-metodo/scripts/ejecucion.py").is_file())
+        self.assertTrue(
+            (destino / "docs/00-metodo/decisiones/022-control-plane-de-ejecucion.md").is_file()
+        )
+        self.assertTrue((destino / "docs/05-trabajo/peticiones").is_dir())
+        self.assertFalse(
+            (destino / "docs/05-trabajo/peticiones/LEGACY.json").exists()
+        )
+        lint = self.ejecutar(destino / "docs/00-metodo/scripts/lint_metodo.py")
+        self.assertEqual(lint.returncode, 0, lint.stdout + lint.stderr)
+
+    def test_setup_y_lint_rechazan_ruta_local_con_escape_o_symlink(self):
+        destino = self.base / "rutas-agents"
+        resultado = self.ejecutar(
+            BOOTSTRAP, "--planos", str(self.planos_minimos()), "--destino", str(destino)
+        )
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        externo = self.base / "codigo-externo"
+        externo.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=externo, check=True)
+        repos = destino / "repos.yaml"
+        original = repos.read_text(encoding="utf-8")
+        repos.write_text(
+            re.sub(r"ruta_local:\s*\S+", "ruta_local: ../codigo-externo", original),
+            encoding="utf-8",
+        )
+
+        setup = self.ejecutar(destino / "setup.py")
+        lint = self.ejecutar(destino / "docs/00-metodo/scripts/lint_metodo.py")
+
+        self.assertNotEqual(setup.returncode, 0, setup.stdout + setup.stderr)
+        self.assertIn("ruta_local", (setup.stdout + setup.stderr).lower())
+        self.assertNotEqual(lint.returncode, 0, lint.stdout + lint.stderr)
+        self.assertIn("ruta_local", (lint.stdout + lint.stderr).lower())
+
+        repos.write_text(original, encoding="utf-8")
+        main = destino / "main"
+        if main.is_dir() and not main.is_symlink():
+            shutil.rmtree(main)
+        main.symlink_to(externo, target_is_directory=True)
+        lint_symlink = self.ejecutar(destino / "docs/00-metodo/scripts/lint_metodo.py")
+        self.assertNotEqual(lint_symlink.returncode, 0, lint_symlink.stdout + lint_symlink.stderr)
+        self.assertIn("symlink", (lint_symlink.stdout + lint_symlink.stderr).lower())
+
+    def test_depurar_registro_es_dry_run_y_solo_olvida_rutas_ausentes(self):
+        registro = self.base / "registro-aislado.json"
+        existente = self.base / "workspace-real"
+        existente.mkdir()
+        ausente = self.base / "workspace-borrado"
+        registro.write_text(
+            json.dumps(
+                {
+                    "formato": 1,
+                    "proyectos": [
+                        {"ruta": str(existente), "titulo": "Real", "huella": "a"},
+                        {"ruta": str(ausente), "titulo": "Viejo", "huella": "b"},
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        entorno = dict(os.environ)
+        entorno["INGENIERIA_REQUISITOS_REGISTRO"] = str(registro)
+
+        previo = registro.read_bytes()
+        dry_run = subprocess.run(
+            [sys.executable, str(PROYECTOS), "depurar"],
+            cwd=RAIZ,
+            env=entorno,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(dry_run.returncode, 0, dry_run.stdout + dry_run.stderr)
+        self.assertEqual(registro.read_bytes(), previo)
+        self.assertIn(str(ausente), dry_run.stdout)
+
+        aplicar = subprocess.run(
+            [sys.executable, str(PROYECTOS), "depurar", "--aplicar"],
+            cwd=RAIZ,
+            env=entorno,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(aplicar.returncode, 0, aplicar.stdout + aplicar.stderr)
+        datos = json.loads(registro.read_text(encoding="utf-8"))
+        self.assertEqual([p["ruta"] for p in datos["proyectos"]], [str(existente)])
+
+    def test_registro_rechaza_dos_clones_vivos_del_mismo_meta_remoto(self):
+        registro = self.base / "registro-remotos.json"
+        entorno = dict(os.environ)
+        entorno["INGENIERIA_REQUISITOS_REGISTRO"] = str(registro)
+        clones = []
+        for nombre in ("original-agents", "copia-agents"):
+            workspace = self.base / nombre
+            (workspace / "docs/02-flujos/planos").mkdir(parents=True)
+            (workspace / "AGENTS.md").write_text("# Demo\n", encoding="utf-8")
+            (workspace / "docs/02-flujos/planos/planos.json").write_text(
+                json.dumps({"titulo": nombre}), encoding="utf-8"
+            )
+            subprocess.run(["git", "init", "-q", "-b", "main"], cwd=workspace, check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "remote",
+                    "add",
+                    "origin",
+                    "git@github.com:nategentile/demo-agents.git",
+                ],
+                cwd=workspace,
+                check=True,
+            )
+            clones.append(workspace)
+
+        primero = subprocess.run(
+            [sys.executable, str(PROYECTOS), "registrar", str(clones[0])],
+            cwd=RAIZ,
+            env=entorno,
+            text=True,
+            capture_output=True,
+        )
+        segundo = subprocess.run(
+            [sys.executable, str(PROYECTOS), "registrar", str(clones[1])],
+            cwd=RAIZ,
+            env=entorno,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(primero.returncode, 0, primero.stdout + primero.stderr)
+        self.assertNotEqual(segundo.returncode, 0)
+        self.assertIn("mismo remoto", segundo.stdout + segundo.stderr)
+        datos = json.loads(registro.read_text(encoding="utf-8"))
+        self.assertEqual(len(datos["proyectos"]), 1)
+        self.assertEqual(datos["proyectos"][0]["ruta"], str(clones[0].resolve()))
+
+    def test_registro_concurrente_no_pierde_altas(self):
+        registro = self.base / "registro-concurrente.json"
+        entorno = dict(os.environ)
+        entorno["INGENIERIA_REQUISITOS_REGISTRO"] = str(registro)
+        procesos = []
+        total = 24
+        for numero in range(total):
+            workspace = self.base / f"workspace-{numero:02d}"
+            (workspace / "docs/02-flujos/planos").mkdir(parents=True)
+            (workspace / "AGENTS.md").write_text("# Demo\n", encoding="utf-8")
+            (workspace / "docs/02-flujos/planos/planos.json").write_text(
+                json.dumps({"titulo": f"Demo {numero}"}), encoding="utf-8"
+            )
+            procesos.append(
+                subprocess.Popen(
+                    [sys.executable, str(PROYECTOS), "registrar", str(workspace)],
+                    cwd=RAIZ,
+                    env=entorno,
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+            )
+
+        salidas = [proceso.communicate(timeout=20) for proceso in procesos]
+        for proceso, (stdout, stderr) in zip(procesos, salidas):
+            self.assertEqual(proceso.returncode, 0, stdout + stderr)
+        datos = json.loads(registro.read_text(encoding="utf-8"))
+        self.assertEqual(len(datos["proyectos"]), total)
+        self.assertEqual(
+            {Path(p["ruta"]).name for p in datos["proyectos"]},
+            {f"workspace-{numero:02d}" for numero in range(total)},
+        )
+
+    def workspace_antiguo(self, con_trabajo=True):
+        ws = self.base / ("antiguo-trabajo" if con_trabajo else "antiguo")
+        for nombre in (
+            "00-metodo",
+            "01-constitucion",
+            "02-flujos",
+            "03-investigacion",
+            "04-planificacion",
+            "05-trabajo/archivo",
+            "bugs",
+            "conocimiento",
+            "decisiones",
+        ):
+            (ws / "docs" / nombre).mkdir(parents=True)
+        (ws / "AGENTS.md").write_text(
+            "# AGENTS.md — Antiguo (meta-repo)\n", encoding="utf-8"
+        )
+        (ws / "docs/05-trabajo/ESTADO.md").write_text("# Estado\n", encoding="utf-8")
+        (ws / "docs/bugs/INDICE.md").write_text("001-antigua\n", encoding="utf-8")
+        (ws / "docs/02-flujos/planos").mkdir()
+        (ws / "docs/02-flujos/planos/planos.json").write_text(
+            '{"version": 2, "titulo": "Antiguo"}\n', encoding="utf-8"
+        )
+        if con_trabajo:
+            unidad = ws / "docs/05-trabajo/001-antigua"
+            unidad.mkdir()
+            (unidad / "especificacion.md").write_text(
+                "---\nunidad: 001-antigua\ntipo: feature\ncarril: normal\n"
+                "estado: planificada\naprobado: no\nactividad: REC-1\nficheros: []\n"
+                "actualizado: 2026-08-01\n---\n",
+                encoding="utf-8",
+            )
+            (ws / "docs/bugs/002-antiguo.md").write_text(
+                "---\nunidad: 002-antiguo\ntipo: bug\ncarril: normal\n"
+                "estado: planificada\naprobado: no\nactividad: REC-1\nficheros: []\n"
+                "actualizado: 2026-08-01\n---\n",
+                encoding="utf-8",
+            )
+        subprocess.run(["git", "init", "-b", "main"], cwd=ws, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=ws, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"], cwd=ws, check=True
+        )
+        subprocess.run(["git", "add", "-A"], cwd=ws, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "estado antiguo"],
+            cwd=ws,
+            check=True,
+            capture_output=True,
+        )
+        return ws
+
+    def test_actualizar_crea_allowlist_sin_inventar_peticiones(self):
+        ws = self.workspace_antiguo()
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        legacy = json.loads(
+            (ws / "docs/05-trabajo/peticiones/LEGACY.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(legacy["modo"], "observacion")
+        self.assertIn("001-antigua", legacy["unidades"])
+        self.assertIn("002-antiguo", legacy["bugs"])
+        self.assertEqual(
+            list((ws / "docs/05-trabajo/peticiones").glob("P-*")), []
+        )
+
+    def test_actualizar_retira_launcher_inseguro_y_la_reversion_lo_recupera(self):
+        ws = self.workspace_antiguo()
+        antiguo = ws / "docs/00-metodo/scripts/sandbox_lanzar.py"
+        antiguo.parent.mkdir(parents=True, exist_ok=True)
+        antiguo.write_text("#!/usr/bin/env python3\n# launcher antiguo\n", encoding="utf-8")
+        subprocess.run(["git", "add", str(antiguo)], cwd=ws, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "launcher antiguo"],
+            cwd=ws,
+            check=True,
+            capture_output=True,
+        )
+        punto_retorno = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+            capture_output=True, check=True,
+        ).stdout.strip()
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertFalse(antiguo.exists())
+        cambio = subprocess.run(
+            ["git", "show", "--format=", "--name-status", "HEAD"],
+            cwd=ws, text=True, capture_output=True, check=True,
+        ).stdout
+        self.assertIn("D\tdocs/00-metodo/scripts/sandbox_lanzar.py", cambio)
+        recuperable = subprocess.run(
+            [
+                "git",
+                "show",
+                f"{punto_retorno}:docs/00-metodo/scripts/sandbox_lanzar.py",
+            ],
+            cwd=ws,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+        self.assertIn("launcher antiguo", recuperable)
+
+    def test_actualizar_revierte_rutas_si_el_linter_falla(self):
+        ws = self.workspace_antiguo(con_trabajo=False)
+        (ws / "codebase").mkdir()
+        subprocess.run(["git", "add", "codebase"], cwd=ws, check=True)
+        # Git no guarda carpetas vacías: el linter sí las ve, que es justo el fallo inducido.
+        agents_previo = (ws / "AGENTS.md").read_bytes()
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertNotEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertEqual((ws / "AGENTS.md").read_bytes(), agents_previo)
+        self.assertFalse((ws / "docs/00-metodo/scripts/peticion.py").exists())
+        self.assertFalse((ws / "docs/05-trabajo/peticiones/LEGACY.json").exists())
+
+    def test_actualizar_respeta_lease_exclusivo_del_workspace(self):
+        ws = self.workspace_antiguo()
+        modulo_path = RAIZ / "plantilla/docs/00-metodo/scripts/lease.py"
+        spec = importlib.util.spec_from_file_location("lease_test_modo_d", modulo_path)
+        modulo = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(modulo)
+        autoridad = modulo.LeaseManager(ws, session_id="auditoria-activa").acquire(
+            "unit:002-auditoria"
+        )
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+            capture_output=True, check=True,
+        ).stdout.strip()
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertNotEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertIn("auditoria-activa", resultado.stdout + resultado.stderr)
+        self.assertEqual(
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+                capture_output=True, check=True,
+            ).stdout.strip(),
+            head,
+        )
+        self.assertFalse((ws / "docs/00-metodo/scripts/peticion.py").exists())
+        autoridad.release()
+
+    def test_actualizar_rechaza_repo_local_symlink_antes_de_tocar(self):
+        ws = self.workspace_antiguo()
+        externo = self.base / "repo-externo-modo-d"
+        externo.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=externo, check=True)
+        (ws / "main").symlink_to(externo, target_is_directory=True)
+        (ws / "repos.yaml").write_text(
+            "codigo:\n  ruta_local: main/\n  rama_principal: main\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "repos.yaml", "main"], cwd=ws, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "configura repo"], cwd=ws,
+            check=True, capture_output=True,
+        )
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+            capture_output=True, check=True,
+        ).stdout.strip()
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertNotEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertIn("symlink", (resultado.stdout + resultado.stderr).lower())
+        self.assertEqual(
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+                capture_output=True, check=True,
+            ).stdout.strip(),
+            head,
+        )
+        self.assertFalse((ws / "docs/00-metodo/scripts/peticion.py").exists())
+
+    def test_actualizar_no_stagea_trabajo_ajeno_que_aparece_durante_la_operacion(self):
+        ws = self.workspace_antiguo()
+        proceso, ready, gate = self.proceso_actualizar_con_failpoint(
+            "actualizar_antes_stage_final", ws
+        )
+        self.esperar_barrera(ready)
+        ajeno = ws / "docs/05-trabajo/nota-ajena.md"
+        ajeno.write_text("trabajo de otra sesión\n", encoding="utf-8")
+        os.write(gate, b"1")
+        os.close(gate)
+        salida, error = proceso.communicate(timeout=10)
+
+        self.assertEqual(proceso.returncode, 0, salida + error)
+        incluidos = subprocess.run(
+            ["git", "show", "--format=", "--name-only", "HEAD"],
+            cwd=ws, text=True, capture_output=True, check=True,
+        ).stdout.splitlines()
+        self.assertNotIn("docs/05-trabajo/nota-ajena.md", incluidos)
+        self.assertIn("?? docs/05-trabajo/nota-ajena.md", subprocess.run(
+            ["git", "status", "--porcelain"], cwd=ws, text=True,
+            capture_output=True, check=True,
+        ).stdout)
+
+    def test_actualizar_bloquea_arbol_sucio_sin_stagear_ni_commitear(self):
+        ws = self.workspace_antiguo()
+        ajeno = ws / "docs/05-trabajo/nota-ajena.md"
+        ajeno.write_text("trabajo previo de otra sesión\n", encoding="utf-8")
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+            capture_output=True, check=True,
+        ).stdout.strip()
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertNotEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertIn("sucio", (resultado.stdout + resultado.stderr).lower())
+        self.assertEqual(subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+            capture_output=True, check=True,
+        ).stdout.strip(), head)
+        self.assertEqual(subprocess.run(
+            ["git", "diff", "--cached", "--name-only"], cwd=ws, text=True,
+            capture_output=True, check=True,
+        ).stdout, "")
+        self.assertIn("?? docs/05-trabajo/nota-ajena.md", subprocess.run(
+            ["git", "status", "--porcelain"], cwd=ws, text=True,
+            capture_output=True, check=True,
+        ).stdout)
+        self.assertFalse((ws / "docs/00-metodo/scripts/peticion.py").exists())
+
+    def test_actualizar_bloquea_unidad_en_obra_aunque_el_arbol_este_limpio(self):
+        ws = self.workspace_antiguo()
+        ficha = ws / "docs/05-trabajo/001-antigua/especificacion.md"
+        ficha.write_text(
+            ficha.read_text(encoding="utf-8").replace(
+                "estado: planificada", "estado: en_obra"
+            ),
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", str(ficha)], cwd=ws, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "unidad en obra"], cwd=ws,
+            check=True, capture_output=True,
+        )
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertNotEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertIn("001-antigua", resultado.stdout + resultado.stderr)
+        self.assertFalse((ws / "docs/00-metodo/scripts/peticion.py").exists())
+
+    def test_actualizar_bloquea_si_origin_avanza_antes_de_tocar(self):
+        ws = self.workspace_antiguo()
+        remoto = self.base / "remote.git"
+        subprocess.run(["git", "init", "--bare", remoto], check=True, capture_output=True)
+        subprocess.run(["git", "remote", "add", "origin", remoto], cwd=ws, check=True)
+        subprocess.run(["git", "push", "-u", "origin", "main"], cwd=ws,
+                       check=True, capture_output=True)
+        otro = self.base / "otro-host"
+        subprocess.run(["git", "clone", "-b", "main", remoto, otro],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Otro"], cwd=otro, check=True)
+        subprocess.run(["git", "config", "user.email", "otro@example.com"], cwd=otro,
+                       check=True)
+        (otro / "avance-remoto.md").write_text("avance\n", encoding="utf-8")
+        subprocess.run(["git", "add", "avance-remoto.md"], cwd=otro, check=True)
+        subprocess.run(["git", "commit", "-m", "avance remoto"], cwd=otro,
+                       check=True, capture_output=True)
+        subprocess.run(["git", "push", "origin", "main"], cwd=otro,
+                       check=True, capture_output=True)
+        agents_previo = (ws / "AGENTS.md").read_bytes()
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertNotEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertIn("remoto", (resultado.stdout + resultado.stderr).lower())
+        self.assertEqual((ws / "AGENTS.md").read_bytes(), agents_previo)
+        self.assertFalse((ws / "docs/00-metodo/scripts/peticion.py").exists())
+
+    def test_actualizar_recupera_sigkill_con_journal_durable(self):
+        ws = self.workspace_antiguo()
+        proceso, ready, gate = self.proceso_actualizar_con_failpoint(
+            "actualizar_despues_primera_escritura", ws
+        )
+        self.esperar_barrera(ready)
+        proceso.kill()
+        proceso.wait(timeout=3)
+        proceso.communicate()
+        os.close(gate)
+        journal = ws / ".runtime/transactions/modo-d.json"
+        self.assertTrue(journal.is_file())
+
+        recuperada = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertEqual(recuperada.returncode, 0, recuperada.stdout + recuperada.stderr)
+        self.assertFalse(journal.exists())
+        revision = self.ejecutar(ACTUALIZAR, "revisar", str(ws))
+        self.assertEqual(revision.returncode, 0, revision.stdout + revision.stderr)
+        self.assertIn("0 proyecto(s) con cambios pendientes", revision.stdout)
+
+    def test_crash_despues_del_commit_conserva_commit_y_cierra_journal(self):
+        ws = self.workspace_antiguo()
+        anterior = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+            capture_output=True, check=True,
+        ).stdout.strip()
+        proceso, ready, gate = self.proceso_actualizar_con_failpoint(
+            "actualizar_despues_commit", ws
+        )
+        self.esperar_barrera(ready)
+        publicado = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+            capture_output=True, check=True,
+        ).stdout.strip()
+        self.assertNotEqual(publicado, anterior)
+        proceso.kill()
+        proceso.wait(timeout=3)
+        proceso.communicate()
+        os.close(gate)
+        journal = ws / ".runtime/transactions/modo-d.json"
+        self.assertTrue(journal.is_file())
+
+        recuperada = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertEqual(recuperada.returncode, 0, recuperada.stdout + recuperada.stderr)
+        self.assertIn("ya estaba commiteada", recuperada.stdout)
+        self.assertFalse(journal.exists())
+        self.assertEqual(
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+                capture_output=True, check=True,
+            ).stdout.strip(),
+            publicado,
+        )
+        self.assertEqual(
+            subprocess.run(
+                ["git", "status", "--porcelain"], cwd=ws, text=True,
+                capture_output=True, check=True,
+            ).stdout,
+            "",
+        )
+
+    def test_journal_rechaza_path_traversal_sin_tocar_fuera(self):
+        ws = self.workspace_antiguo()
+        victima = self.base / "victima.txt"
+        victima.write_bytes(b"contenido privado\n")
+        atacante = self.entrada_journal(b"sobrescrito desde journal\n")
+        journal = self.escribir_journal(
+            ws,
+            {"../victima.txt": atacante},
+            published={"../victima.txt": atacante},
+        )
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertNotEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertEqual(victima.read_bytes(), b"contenido privado\n")
+        self.assertTrue(journal.is_file())
+        self.assertIn("journal", (resultado.stdout + resultado.stderr).lower())
+
+    def test_journal_rechaza_symlink_sin_seguirlo(self):
+        ws = self.workspace_antiguo()
+        victima = self.base / "fuera-agents.md"
+        victima.write_bytes(b"fuera intacto\n")
+        agents = ws / "AGENTS.md"
+        agents.unlink()
+        agents.symlink_to(victima)
+        atacante = self.entrada_journal(b"contenido atacante\n")
+        journal = self.escribir_journal(
+            ws,
+            {"AGENTS.md": atacante},
+            published={"AGENTS.md": atacante},
+        )
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertNotEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertEqual(victima.read_bytes(), b"fuera intacto\n")
+        self.assertTrue(agents.is_symlink())
+        self.assertTrue(journal.is_file())
+
+    def test_journal_rechaza_schema_y_fase_no_canonicos(self):
+        ws = self.workspace_antiguo()
+        agents_previo = (ws / "AGENTS.md").read_bytes()
+        atacante = self.entrada_journal(b"contenido atacante\n")
+        journal = self.escribir_journal(
+            ws,
+            {"AGENTS.md": atacante},
+            published={"AGENTS.md": atacante},
+            fase="lo-que-diga-el-atacante",
+            campo_ignorado="bypass",
+        )
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertNotEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertEqual((ws / "AGENTS.md").read_bytes(), agents_previo)
+        self.assertTrue(journal.is_file())
+
+    def test_crash_antes_del_replace_no_publica_un_fichero_parcial(self):
+        ws = self.workspace_antiguo()
+        destino = ws / ".githooks/pre-push"
+        self.assertFalse(destino.exists())
+        proceso, ready, gate = self.proceso_actualizar_con_failpoint(
+            "actualizar_antes_reemplazo_atomico", ws
+        )
+
+        self.esperar_barrera(ready)
+        self.assertFalse(destino.exists())
+        proceso.kill()
+        proceso.wait(timeout=3)
+        proceso.communicate()
+        os.close(gate)
+
+        self.assertFalse(destino.exists())
+        self.assertTrue((ws / ".runtime/transactions/modo-d.json").is_file())
+
+    def test_cambio_ajeno_en_misma_ruta_antes_del_stage_bloquea_sin_clobber(self):
+        ws = self.workspace_antiguo()
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+            capture_output=True, check=True,
+        ).stdout.strip()
+        proceso, ready, gate = self.proceso_actualizar_con_failpoint(
+            "actualizar_antes_stage_final", ws
+        )
+        self.esperar_barrera(ready)
+        ajeno = b"cambio concurrente en la misma ruta\n"
+        (ws / "AGENTS.md").write_bytes(ajeno)
+        os.write(gate, b"1")
+        os.close(gate)
+        salida, error = proceso.communicate(timeout=10)
+
+        self.assertNotEqual(proceso.returncode, 0, salida + error)
+        self.assertEqual((ws / "AGENTS.md").read_bytes(), ajeno)
+        self.assertEqual(
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+                capture_output=True, check=True,
+            ).stdout.strip(),
+            head,
+        )
+        self.assertEqual(
+            subprocess.run(
+                ["git", "diff", "--cached", "--name-only"], cwd=ws, text=True,
+                capture_output=True, check=True,
+            ).stdout,
+            "",
+        )
+
+    def test_stage_exacto_no_absorbe_cambio_ajeno_posterior(self):
+        ws = self.workspace_antiguo()
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+            capture_output=True, check=True,
+        ).stdout.strip()
+        proceso, ready, gate = self.proceso_actualizar_con_failpoint(
+            "actualizar_despues_stage_exact", ws
+        )
+        self.esperar_barrera(ready)
+        esperado = (RAIZ / "plantilla/AGENTS.md").read_text(encoding="utf-8").replace(
+            "{{TITULO}}", "Antiguo"
+        )
+        blob_stageado = subprocess.run(
+            ["git", "show", ":AGENTS.md"], cwd=ws, text=True,
+            capture_output=True, check=True,
+        ).stdout
+        self.assertEqual(blob_stageado, esperado)
+        ajeno = b"cambio despues del stage exacto\n"
+        (ws / "AGENTS.md").write_bytes(ajeno)
+        os.write(gate, b"1")
+        os.close(gate)
+        salida, error = proceso.communicate(timeout=10)
+
+        self.assertNotEqual(proceso.returncode, 0, salida + error)
+        self.assertEqual((ws / "AGENTS.md").read_bytes(), ajeno)
+        self.assertEqual(
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+                capture_output=True, check=True,
+            ).stdout.strip(),
+            head,
+        )
+        self.assertEqual(
+            subprocess.run(
+                ["git", "diff", "--cached", "--name-only"], cwd=ws, text=True,
+                capture_output=True, check=True,
+            ).stdout,
+            "",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

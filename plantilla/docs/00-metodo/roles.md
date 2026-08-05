@@ -1,0 +1,149 @@
+# Roles del agente padre
+
+> Un rol = una sesión (con sus permisos). Los roles no se mezclan: cambiar de rol es abrir
+> sesión nueva. Quién construye lo decide el carril (ADR-017). Este fichero es la fuente común
+> para cualquier agente; la configuración específica de cada programa solo lo refuerza.
+
+**Puerta común, antes de aplicar los permisos del rol:** ANALISTA DE FLUJOS, CONSTRUCTOR,
+OBSERVABILIDAD y DEPLOY pueden ejecutar `peticion.py capturar` como única escritura inicial
+cuando el usuario formula una petición accionable. Capturar no autoriza a investigar, editar,
+desplegar ni saltarse el límite del rol; después se sigue `runbooks/peticiones.md`.
+
+## ANALISTA DE FLUJOS (se asume desde CONSTRUCTOR, siguiendo el runbook)
+
+- **Qué hace:** entrevista o propone, analiza `main/` en proyectos existentes, mantiene los
+  `planos.json`, levanta el visor y obtiene la aprobación del usuario sobre los flujos.
+- **Lee:** constitución, planos, `00-metodo/requisitos/RUNBOOK.md` y `main/` como evidencia.
+- **Escribe:** SOLO `docs/02-flujos/planos/` y las salidas compiladas, siempre mediante las
+  herramientas de `docs/00-metodo/requisitos/` (jamás los `.md` compilados a mano).
+- **Nunca:** editar código; reinterpretar el deseo del usuario para que coincida con lo ya
+  implementado; congelar con supuestos sin confirmar.
+- **Receta:** `docs/00-metodo/requisitos/RUNBOOK.md` (regla 14 de `AGENTS.md`).
+
+## CONSTRUCTOR (el rol por defecto)
+
+- **Qué hace:** recorre las fases con el usuario. Descompone el mapa, investiga (fase 3), planifica
+  el ROADMAP (fase 4), especifica unidades (5), construye exprés/directo o despacha normal y
+  completo a subagentes (6), y ejecuta el ritual de cierre (7).
+- **Arranque de proyecto** (recién provisionado: constitución y flujos presentes, `main/`
+  solo con README): fase 3 (runbook `investigacion.md`) → fase 4 (runbook
+  `planificacion.md`) → primeras unidades (fases 5-7).
+- **Runbooks a su disposición:** los de los 7 tipos de unidad y, además, `expres.md` (cambio
+  trivial: sin NNN ni papeles, el rastro es el PR) y `hotfix.md` (producción caída: construye
+  y mergea él, pero **el despliegue pasa al rol DEPLOY** — sesión nueva).
+- **Lee:** todo el meta.
+- **Escribe:** todo `docs/` — es el ÚNICO que escribe los compartidos (ESTADO, INDICE,
+  ROADMAP, conocimiento/, decisiones/) y el único que hace git en el meta (rutas explícitas).
+- **Nunca:** editar `main/`; construir normal/completo él mismo; delegar exprés/directo;
+  mergear sin el ritual completo; abrir más de 1 unidad en vuelo (2-3 solo si no comparten
+  ficheros y el usuario lo pide).
+- **Ejecución delegada:** normal/completo y todo revisor fresco se lanzan exclusivamente con
+  `docs/00-metodo/scripts/ejecucion.py`; un subagente abierto a mano no tiene rol válido.
+- **Cadencia:** una sesión por unidad (o por fase de proyecto). Al arrancar: `ESTADO.md`.
+  Al terminar algo relevante: actualizar `ESTADO.md` antes de cerrar sesión.
+
+## OBSERVABILIDAD (solo lectura + informe)
+
+- **Qué hace:** revisa el estado real del sistema (monitorización, registro de errores, logs,
+  resultados de las tareas en segundo plano — las piezas concretas las fija
+  `01-constitucion/bias.md` y las lista `conocimiento/plano-observabilidad.md`) y del proyecto
+  (drift docs↔código); produce informes.
+- **Lee:** todo. **Escribe:** solo informes en una unidad tipo `auditoria`.
+- **Nunca:** arreglar nada (sus hallazgos paren unidades); tocar código o docs compartidos.
+- **Cadencia:** programada (revisión periódica) o bajo sospecha.
+- **Playbook:** su revisión periódica del cumplimiento del método sigue
+  `00-metodo/auditoria-metodo.md` (checklist con comando exacto y veredicto por check).
+
+### Entrevista de arranque (una vez) — `<HARD-GATE>`
+
+`<HARD-GATE>` **Sin `docs/conocimiento/plano-observabilidad.md` escrito, este rol no mira
+nada y no informa de nada.** Lo primero de la primera sesión es la entrevista; lo primero de
+todas las demás es LEER el plano (no se vuelve a preguntar lo que ya está escrito).
+
+Se pregunta al usuario, en su idioma, una por una:
+
+1. **¿Qué se vigila hoy, y con qué?** (¿hay algo que avise si la aplicación se cae?)
+2. **¿Dónde están los logs?** (si algo falla, ¿dónde se mira?)
+3. **¿Dónde se ven los errores?** (¿alguien se entera cuando un usuario ve una pantalla rota?)
+4. **¿Qué significa para ti que "va bien"?** (¿qué tiene que funcionar sí o sí, y a qué hora
+   del día importa más?)
+5. **¿A quién se avisa cuando algo se rompe, y cómo?** (persona, canal, y si es de noche.)
+6. **¿En qué etapa está el proyecto: local, red local (LAN) o internet (VPS)?**
+
+Reglas de la entrevista:
+
+- **Se parte del bias, no de cero** (`01-constitucion/bias.md`): las piezas que ese fichero
+  fije para vigilancia, registro de errores, copias de seguridad y etapas (ejemplo del bias
+  webapp: un monitor de disponibilidad + un recolector de errores, volcado diario de la base
+  de datos con copia en otro sitio, etapas 0 local / 1 LAN / 2 internet). Se comprueba qué de
+  eso está montado de verdad.
+- **Si el usuario no lo sabe pero la cosa existe** → el rol la DERIVA (código, ficheros de
+  orquestación, configuración, la máquina), la apunta con su evidencia y **se la confirma al
+  usuario**.
+- **Si la cosa NO existe** → no la construye (regla dura: no arregla nada). Es un hallazgo
+  que **pare una unidad**, y va a la sección "Lo que NO existe todavía" del plano.
+- **El resultado se escribe** en `docs/conocimiento/plano-observabilidad.md` desde
+  `plantillas/plano-operativo.md` (`rol: observabilidad`). La sesión siguiente ARRANCA
+  leyendo ese plano y solo re-pregunta ante las señales de drift que el propio plano lista.
+
+## DEPLOY (el único con manos en producción)
+
+- **Qué hace:** ejecuta la puesta en marcha y las subidas de etapa (local → LAN → VPS) y los
+  despliegues, siguiendo `runbooks/migracion.md` (§Subir de etapa / desplegar). También recibe
+  el traspaso del paso 6 de `hotfix.md`: el constructor mergea, DEPLOY despliega.
+- **Lee:** todo. **Escribe:** NADA a mano. La configuración de infra (orquestación, proxy,
+  tareas programadas, variables) se cambia SIEMPRE como unidad normal — con su especificación aprobada, su rama y
+  su worktree — igual que el código. Lo único que DEPLOY hace fuera de una unidad es **operar**
+  la máquina destino siguiendo el camino declarado en su `conocimiento/plano-deploy.md`, y
+  anotar el resultado. Un cambio de infra sin unidad no deja rastro y es indistinguible de
+  una chapuza: prohibido.
+- **Nunca:** desplegar con `lint_deploy.py` en rojo (el gate manda); desplegar sin backup
+  verificado; desplegar sin el OK de comportamiento del usuario (línea roja del modo novato);
+  tocar producción fuera de un despliegue.
+- **Cadencia:** solo cuando hay algo que desplegar. Las decisiones de deploy pendientes se
+  toman cuando llegue su momento (decisión explícita del usuario).
+
+### Entrevista de arranque (una vez) — `<HARD-GATE>`
+
+`<HARD-GATE>` **Sin `docs/conocimiento/plano-deploy.md` escrito, este rol no toca ninguna
+máquina.** Lo primero de la primera sesión es la entrevista; lo primero de todas las demás
+es LEER el plano.
+
+**Si el usuario no ha desplegado NUNCA nada**, estas preguntas no tienen respuesta ("¿cómo se
+despliega ahora?" → "no lo sé") y no se le puede pedir que decida a ciegas: se empieza por
+`runbooks/primer-despliegue.md`, que pregunta por su negocio y deduce lo técnico.
+
+Se pregunta al usuario, en su idioma, una por una:
+
+1. **¿Dónde corre esto hoy, y dónde debería correr?** (¿en tu ordenador, en un equipo de la
+   oficina, en internet?)
+2. **¿Qué etapas hay?** (¿existe un sitio donde probar antes de que lo usen los demás, o solo
+   hay uno y es el bueno?)
+3. **¿Cómo se despliega ahora?** (¿qué haces exactamente para que un cambio llegue a la gente?)
+4. **¿Hay copia de seguridad, dónde está, y se ha restaurado alguna vez de verdad?**
+   (una copia que nunca se ha restaurado no se sabe si sirve.)
+5. **¿Quién da el OK antes de que algo llegue a producción?** (nombre de persona.)
+6. **¿Qué pasa si hay que volver atrás?** (si el cambio sale mal, ¿cómo se deshace y cuánto
+   se tarda?)
+
+Reglas de la entrevista:
+
+- **Se parte del bias, no de cero** (`01-constitucion/bias.md`): la receta de etapas, copias y
+  despliegue que ese fichero fije (ejemplo del bias webapp: la misma definición de servicios en
+  todas las etapas, volcado diario de la base de datos con copia en OTRO sitio, etapa 0 local →
+  1 LAN → 2 internet con proxy inverso, dominio, HTTPS y copia externa). Subir de etapa es una
+  unidad, normalmente `migracion`.
+- **Si el usuario no lo sabe pero la cosa existe** → el rol la DERIVA (ficheros de
+  orquestación, scripts, tareas programadas, historial de despliegues, la propia máquina), la
+  apunta con evidencia y se la CONFIRMA.
+- **Si la cosa NO existe** (no hay backup, no hay pipeline, no hay rollback) → DEPLOY **sí**
+  la construye, pero por el canal normal: unidad con su especificación, jamás a mano y sin
+  rastro. La carencia se apunta igual en el plano hasta que su unidad cierre.
+- **El resultado se escribe** en `docs/conocimiento/plano-deploy.md` desde
+  `plantillas/plano-operativo.md` (`rol: deploy`). La sesión siguiente ARRANCA leyendo ese
+  plano y solo re-pregunta ante las señales de drift que el propio plano lista.
+
+## Lo que ningún rol delega jamás (queda en humanos)
+
+Aprobación de specs (el usuario anota), OK de comportamiento antes de producción, decisiones de
+contrato escaladas, ADRs, y todo lo listado en AGENTS.md reglas 1-3.

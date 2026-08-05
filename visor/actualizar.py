@@ -1,0 +1,1033 @@
+#!/usr/bin/env python3
+"""actualizar.py — lleva el método de esta herramienta a los workspaces ya creados.
+
+    python3 visor/actualizar.py buscar            encuentra workspaces y los registra
+    python3 visor/actualizar.py revisar --todos    qué cambiaría (no toca nada)
+    python3 visor/actualizar.py aplicar --todos    lo actualiza
+
+POR QUÉ NO ES UN `git pull`: el workspace es OTRO repositorio, con su propio remoto. Su
+copia del método salió de aquí por copia de ficheros al hacer el bootstrap; no hay
+submódulo, ni subtree, ni remoto compartido. `git pull` allí trae el historial de ESE
+proyecto y del método no se entera.
+
+CÓMO SE DESHACE: con git, que para eso está. Antes de tocar se exige un repositorio con
+árbol e índice limpios; su HEAD es el punto de retorno. Volver atrás es
+`git checkout <ese commit>`, y el commit queda escrito en `HISTORIAL.md`.
+
+Por eso el método se sobrescribe ENTERO, sin clasificar nada ni preguntar por cada fichero:
+la copia de seguridad no es un algoritmo, es un commit. Si un proyecto había adaptado un
+runbook a su gusto, esa versión no se pierde — está en el punto de retorno, a un checkout.
+
+Solo stdlib. `revisar` no escribe nada. `aplicar` solo escribe el método y las piezas que
+lo ejecutan: jamás los planos, el trabajo, los bugs, el conocimiento ni el código.
+"""
+import argparse
+import base64
+import binascii
+import datetime
+import hashlib
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+import tempfile
+import uuid
+from pathlib import Path, PurePosixPath
+
+import bootstrap
+import proyectos
+
+SCRIPTS_METODO = (
+    Path(__file__).resolve().parents[1] / "plantilla/docs/00-metodo/scripts"
+)
+if str(SCRIPTS_METODO) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_METODO))
+import lease as gestion_leases
+import repo_config
+
+for _salida in (sys.stdout, sys.stderr):
+    if hasattr(_salida, "reconfigure"):
+        _salida.reconfigure(encoding="utf-8", errors="replace")
+
+BASE = Path(__file__).resolve().parent
+HERRAMIENTA = BASE.parent
+PLANTILLA = HERRAMIENTA / "plantilla"
+HOY = datetime.date.today().isoformat()
+
+RE_TITULO = re.compile(r"^#\s*AGENTS\.md\s*—\s*(.+?)\s*\(meta-repo\)", re.M)
+HISTORIAL = "docs/00-metodo/HISTORIAL.md"
+RETIRADOS_METODO = ("docs/00-metodo/scripts/sandbox_lanzar.py",)
+CABECERA_HISTORIAL = (
+    "# Historial de actualizaciones del método\n"
+    "\n"
+    "> Lo escribe `visor/actualizar.py` de la herramienta de ingeniería de requisitos.\n"
+    "> El método se sobrescribe entero en cada actualización: lo que hubiera antes en este\n"
+    "> workspace queda guardado en el commit que cada entrada anota. Para volver a ese\n"
+    "> estado: `git checkout <ese commit>`.\n"
+)
+JOURNAL = Path(".runtime/transactions/modo-d.json")
+FASES_JOURNAL = {"preparada", "escribiendo", "validada", "pre_commit", "committed"}
+CLAVES_JOURNAL = {
+    "formato", "operacion", "id", "fase", "punto_retorno", "snapshot",
+    "publicado", "arbol_publicado", "commit",
+}
+CLAVES_ENTRADA = {"contenido", "modo", "sha256"}
+RE_SHA_GIT = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+RE_SHA256 = re.compile(r"^[0-9a-f]{64}$")
+
+
+def git(repo, *args):
+    try:
+        p = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", check=False)
+    except OSError:
+        return 1, ""
+    return p.returncode, (p.stdout + p.stderr).strip()
+
+
+def rutas_sucias(workspace):
+    """Inventario explícito del estado que existía antes de actualizar."""
+    rutas = set()
+    comandos = (
+        ("diff", "--name-only", "-z"),
+        ("diff", "--cached", "--name-only", "-z"),
+        ("ls-files", "--others", "--exclude-standard", "-z"),
+        ("ls-files", "--deleted", "-z"),
+    )
+    for comando in comandos:
+        codigo, salida = git(workspace, *comando)
+        if codigo:
+            continue
+        rutas.update(ruta for ruta in salida.split("\0") if ruta)
+    return sorted(
+        ruta for ruta in rutas
+        if not ruta.startswith((".runtime/", "main/", "worktrees/"))
+    )
+
+
+def trabajo_en_vuelo(workspace):
+    """Devuelve fichas cuyo estado declara trabajo operativo todavía activo."""
+    candidatas = []
+    trabajo = workspace / "docs/05-trabajo"
+    if trabajo.is_dir():
+        candidatas.extend(trabajo.glob("[0-9][0-9][0-9]-*/especificacion.md"))
+    bugs = workspace / "docs/bugs"
+    if bugs.is_dir():
+        candidatas.extend(bugs.glob("[0-9][0-9][0-9]-*.md"))
+    activas = []
+    for ficha in sorted(candidatas):
+        try:
+            contenido = ficha.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if re.search(r"(?m)^estado:\s*(?:en_obra|en_revision)\s*$", contenido):
+            activas.append(str(ficha.relative_to(workspace)).replace("\\", "/"))
+    return activas
+
+
+def stage_explicit(workspace, rutas):
+    rutas = sorted(set(rutas))
+    if not rutas:
+        return 0, ""
+    return git(workspace, "add", "--", *rutas)
+
+
+def git_con_stdin(repo, argumentos, contenido):
+    try:
+        proceso = subprocess.run(
+            ["git", "-C", str(repo), *argumentos], input=contenido,
+            capture_output=True, check=False,
+        )
+    except OSError:
+        return 1, ""
+    salida = (proceso.stdout + proceso.stderr).decode("utf-8", errors="replace").strip()
+    return proceso.returncode, salida
+
+
+def modo_git(estado):
+    return "100755" if stat.S_IMODE(estado[1]) & 0o111 else "100644"
+
+
+def stage_exacto(workspace, publicado):
+    blobs = {}
+    for relativo, estado in sorted(publicado.items()):
+        if estado is None:
+            codigo, salida = git(workspace, "update-index", "--force-remove", "--", relativo)
+            if codigo and "no se pudo" not in salida.lower():
+                raise RuntimeError(f"no pude retirar del índice {relativo}: {salida}")
+            blobs[relativo] = None
+            continue
+        codigo, blob = git_con_stdin(workspace, ["hash-object", "-w", "--stdin"], estado[0])
+        if codigo or not RE_SHA_GIT.fullmatch(blob):
+            raise RuntimeError(f"no pude crear blob exacto para {relativo}: {blob}")
+        codigo, salida = git(
+            workspace, "update-index", "--add", "--cacheinfo", modo_git(estado), blob, relativo
+        )
+        if codigo:
+            raise RuntimeError(f"no pude stagear blob exacto de {relativo}: {salida}")
+        blobs[relativo] = (modo_git(estado), blob)
+    return blobs
+
+
+def verificar_stage_exacto(workspace, blobs):
+    for relativo, esperado in blobs.items():
+        codigo, salida = git(workspace, "ls-files", "--stage", "--", relativo)
+        if esperado is None:
+            if codigo == 0 and salida:
+                raise RuntimeError(f"el índice conserva una ruta retirada: {relativo}")
+            continue
+        campos = salida.split(None, 3)
+        if codigo or len(campos) < 4 or (campos[0], campos[1]) != esperado:
+            raise RuntimeError(f"el índice no contiene el blob exacto de {relativo}")
+
+
+def limpiar_indice(workspace, sha, rutas):
+    codigo, salida = git(workspace, "reset", "--quiet", sha, "--", *sorted(set(rutas)))
+    if codigo:
+        raise RuntimeError(f"no pude devolver el índice al punto de retorno: {salida}")
+
+
+def comprobar_remoto(workspace):
+    """Fetch antes de tocar; bloquea si la rama remota contiene trabajo no local."""
+    if git(workspace, "remote", "get-url", "origin")[0] != 0:
+        return ""
+    codigo, rama = git(workspace, "symbolic-ref", "--quiet", "--short", "HEAD")
+    if codigo or not rama:
+        return "no puedo verificar el remoto porque HEAD no está en una rama"
+    codigo, salida = git(workspace, "fetch", "origin", rama)
+    if codigo:
+        return f"no pude actualizar el remoto antes de tocar:\n{salida}"
+    remoto = f"origin/{rama}"
+    if git(workspace, "rev-parse", "--verify", "--quiet", remoto)[0] != 0:
+        return ""
+    codigo, cuentas = git(workspace, "rev-list", "--left-right", "--count",
+                           f"HEAD...{remoto}")
+    if codigo:
+        return f"no pude comparar HEAD con {remoto}: {cuentas}"
+    partes = cuentas.replace("\t", " ").split()
+    if len(partes) == 2 and int(partes[1]) > 0:
+        return (f"el remoto {remoto} tiene {partes[1]} commit(s) que este workspace no "
+                "tiene; actualízalo y vuelve a ejecutar Modo D")
+    return ""
+
+
+def inventario_legacy(workspace):
+    trabajo = workspace / "docs/05-trabajo"
+    unidades = []
+    if trabajo.is_dir():
+        unidades.extend(
+            ruta.name
+            for ruta in trabajo.iterdir()
+            if ruta.is_dir()
+            and ruta.name not in {"archivo", "peticiones"}
+            and re.fullmatch(r"\d{3}-[a-z0-9][a-z0-9-]*", ruta.name)
+        )
+        archivo = trabajo / "archivo"
+        if archivo.is_dir():
+            unidades.extend(
+                ruta.name
+                for ruta in archivo.iterdir()
+                if ruta.is_dir() and re.fullmatch(r"\d{3}-[a-z0-9][a-z0-9-]*", ruta.name)
+            )
+    bugs_dir = workspace / "docs/bugs"
+    bugs = (
+        [
+            ruta.stem
+            for ruta in bugs_dir.glob("*.md")
+            if re.fullmatch(r"\d{3}-[a-z0-9][a-z0-9-]*", ruta.stem)
+        ]
+        if bugs_dir.is_dir()
+        else []
+    )
+    repo, principal = repo_config.repo_code(workspace)
+    codigo, salida = git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+    ramas = [] if codigo else [r for r in salida.splitlines() if r and r != principal]
+    return {
+        "formato": 1,
+        "modo": "observacion",
+        "unidades": sorted(set(unidades)),
+        "bugs": sorted(set(bugs)),
+        "ramas": sorted(set(ramas)),
+    }
+
+
+def contenido_esperado(workspace):
+    """{ruta en el workspace: contenido que debe tener}, y los avisos que salgan.
+
+    Mismas fuentes que el bootstrap: si el bootstrap lo coloca, esto lo actualiza.
+    """
+    esperado, avisos = {}, []
+    era_sin_inbox = not (
+        workspace / "docs/00-metodo/scripts/peticion.py"
+    ).is_file()
+    for relativo in bootstrap.ARCHIVOS_METODO:
+        esperado[f"docs/00-metodo/{relativo}"] = (
+            PLANTILLA / "docs" / "00-metodo" / relativo).read_text(encoding="utf-8")
+    for nombre in bootstrap.ARCHIVOS_REQUISITOS:
+        origen = (HERRAMIENTA / nombre
+                  if nombre in ("RUNBOOK.md", "requirements-dev.txt") else BASE / nombre)
+        esperado[f"docs/00-metodo/requisitos/{nombre}"] = origen.read_text(encoding="utf-8")
+    for origen in sorted((PLANTILLA / "githooks").rglob("*")):
+        if origen.is_file():
+            rel = origen.relative_to(PLANTILLA / "githooks")
+            esperado[f".githooks/{rel}"] = origen.read_text(encoding="utf-8")
+    esperado["setup.py"] = (PLANTILLA / "setup.py").read_text(encoding="utf-8")
+    # El .gitignore del meta-repo es infraestructura del método: es lo que mantiene main/ y
+    # worktrees/ fuera de git. Sin él, el workspace intenta versionar el repo de código.
+    esperado[".gitignore"] = (PLANTILLA / "gitignore").read_text(encoding="utf-8")
+    esperado["worktrees/README.md"] = (
+        PLANTILLA / "worktrees-README.md").read_text(encoding="utf-8")
+    esperado[".github/workflows/lint.yml"] = bootstrap.generar_ci()
+    for puente in ("CLAUDE.md", "GEMINI.md"):
+        esperado[puente] = "@AGENTS.md\n"
+
+    # AGENTS.md lleva dentro el título del proyecto: se compara contra la plantilla rellenada
+    # con SU título. Si no se puede leer, se dice y se deja fuera — antes desaparecía del
+    # informe en silencio, que es la peor de las tres opciones.
+    actual = workspace / "AGENTS.md"
+    if actual.is_file():
+        m = RE_TITULO.search(actual.read_text(encoding="utf-8", errors="replace"))
+        if m:
+            esperado["AGENTS.md"] = (PLANTILLA / "AGENTS.md").read_text(
+                encoding="utf-8").replace("{{TITULO}}", m.group(1))
+        else:
+            avisos.append("no pude leer el título en la primera línea de AGENTS.md "
+                          "(se espera '# AGENTS.md — <título> (meta-repo)'): lo dejo sin "
+                          "actualizar para no borrarte el nombre del proyecto")
+    if era_sin_inbox:
+        relativo = "docs/05-trabajo/peticiones/LEGACY.json"
+        esperado[relativo] = json.dumps(
+            inventario_legacy(workspace),
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        ) + "\n"
+        avisos.append(
+            "se creará peticiones/LEGACY.json en modo observacion con las unidades, bugs "
+            "y ramas actuales; no se inventará ningún P-ID histórico"
+        )
+    return esperado, avisos
+
+
+def diferencias(workspace, esperado):
+    """(ficheros que cambian, retirados exactos, otros restos no publicados)."""
+    cambios = []
+    for relativo, texto in sorted(esperado.items()):
+        destino = workspace / relativo
+        if not destino.is_file() or destino.read_text(encoding="utf-8",
+                                                      errors="replace") != texto:
+            cambios.append(relativo)
+    retirados = [
+        relativo for relativo in RETIRADOS_METODO
+        if (workspace / relativo).is_file() or (workspace / relativo).is_symlink()
+    ]
+    sobrantes = []
+    metodo = workspace / "docs" / "00-metodo"
+    if metodo.is_dir():
+        for ruta in sorted(metodo.rglob("*")):
+            if not ruta.is_file() or "__pycache__" in ruta.parts:
+                continue
+            relativo = str(ruta.relative_to(workspace)).replace("\\", "/")
+            if (
+                relativo not in esperado
+                and relativo != HISTORIAL
+                and relativo not in RETIRADOS_METODO
+            ):
+                sobrantes.append(relativo)
+    return cambios, retirados, sobrantes
+
+
+def informe(ruta, titulo, cambios, retirados, sobrantes, avisos):
+    print(f"\n=== {titulo} ===\n    {ruta}")
+    if cambios:
+        print(f"    {len(cambios)} fichero(s) del método cambian:")
+        for f in cambios:
+            print(f"          {f}")
+    else:
+        print("    Al día: nada que actualizar.")
+    if retirados:
+        print(f"    {len(retirados)} launcher(s) inseguro(s) conocido(s) se retiran:")
+        for f in retirados:
+            print(f"          {f}")
+    if sobrantes:
+        print(f"    {len(sobrantes)} fichero(s) que el método ya no publica (no se tocan):")
+        for f in sobrantes:
+            print(f"          {f}")
+    for a in avisos:
+        print(f"    AVISO: {a}")
+
+
+def punto_de_retorno(workspace):
+    """Devuelve el HEAD limpio o el motivo por el que no puede ser punto de retorno."""
+    if git(workspace, "rev-parse", "--is-inside-work-tree")[0] != 0:
+        return None, "el workspace no es un repositorio git con un punto de retorno"
+    sucias = rutas_sucias(workspace)
+    if sucias:
+        muestra = ", ".join(sucias[:5])
+        resto = f" (+{len(sucias) - 5})" if len(sucias) > 5 else ""
+        return None, ("el árbol o el índice Git está sucio; Modo D no stagea ni commitea "
+                      f"trabajo ajeno: {muestra}{resto}")
+    codigo, sha = git(workspace, "rev-parse", "HEAD")
+    if codigo:
+        return None, f"el repositorio no tiene ni un commit:\n{sha}"
+    return sha.strip(), ""
+
+
+def contenido_historial(workspace, sha, cambios):
+    ruta = workspace / HISTORIAL
+    previo = ruta.read_text(encoding="utf-8") if ruta.is_file() else CABECERA_HISTORIAL
+    bloque = [f"## {HOY} · método {bootstrap.huella_plantilla()[:12]}…",
+              "",
+              f"Estado anterior: `{sha[:8]}` — ahí está lo que hubiera aquí antes "
+              f"(`git checkout {sha[:8]}`).",
+              f"{len(cambios)} fichero(s) sobrescritos:",
+              ""]
+    bloque += [f"- `{c}`" for c in cambios]
+    return (previo.rstrip("\n") + "\n\n" + "\n".join(bloque) + "\n").encode("utf-8")
+
+
+def escribir_historial(workspace, sha, cambios):
+    escribir_bytes_atomico(
+        workspace, HISTORIAL, contenido_historial(workspace, sha, cambios), 0o644
+    )
+
+
+def pasar_linter(workspace):
+    linter = workspace / "docs/00-metodo/scripts/lint_metodo.py"
+    if not linter.is_file():
+        return False, "no existe docs/00-metodo/scripts/lint_metodo.py"
+    r = subprocess.run([sys.executable, str(linter)], cwd=str(workspace), capture_output=True,
+                       text=True, encoding="utf-8", errors="replace")
+    salida = (r.stdout + r.stderr).strip()
+    if r.returncode:
+        print("\n    -- el linter del método NO pasa en este workspace --")
+        for linea in salida.splitlines():
+            print(f"      {linea}")
+    elif salida:
+        print(f"    linter del método: {salida.splitlines()[-1].strip()}")
+    return r.returncode == 0, salida
+
+
+def snapshot_rutas(workspace, rutas):
+    return {relativo: estado_ruta(workspace, relativo) for relativo in rutas}
+
+
+def ruta_workspace(workspace, relativo, *, permitir_ausente=True):
+    """Resuelve una ruta canónica sin seguir enlaces dentro del workspace."""
+    if not isinstance(relativo, str) or not relativo or "\\" in relativo or "\0" in relativo:
+        raise RuntimeError(f"journal de Modo D contiene ruta inválida: {relativo!r}")
+    pura = PurePosixPath(relativo)
+    if pura.is_absolute() or pura.as_posix() != relativo or any(
+        parte in {"", ".", ".."} for parte in pura.parts
+    ):
+        raise RuntimeError(f"journal de Modo D contiene ruta no canónica: {relativo!r}")
+    raiz = Path(workspace).resolve()
+    actual = raiz
+    for indice, parte in enumerate(pura.parts):
+        actual = actual / parte
+        try:
+            estado = os.lstat(actual)
+        except FileNotFoundError:
+            if not permitir_ausente and indice == len(pura.parts) - 1:
+                raise RuntimeError(f"ruta ausente durante Modo D: {relativo}")
+            continue
+        if stat.S_ISLNK(estado.st_mode):
+            raise RuntimeError(f"Modo D rechaza symlink en ruta protegida: {relativo}")
+        if indice < len(pura.parts) - 1 and not stat.S_ISDIR(estado.st_mode):
+            raise RuntimeError(f"Modo D rechaza padre no-directorio: {relativo}")
+        if indice == len(pura.parts) - 1 and not stat.S_ISREG(estado.st_mode):
+            raise RuntimeError(f"Modo D rechaza objeto no regular: {relativo}")
+    return actual
+
+
+def preparar_padre_seguro(workspace, relativo):
+    pura = PurePosixPath(relativo)
+    actual = Path(workspace).resolve()
+    for parte in pura.parts[:-1]:
+        actual = actual / parte
+        try:
+            estado = os.lstat(actual)
+        except FileNotFoundError:
+            try:
+                actual.mkdir(mode=0o755)
+            except FileExistsError:
+                pass
+            estado = os.lstat(actual)
+        if stat.S_ISLNK(estado.st_mode) or not stat.S_ISDIR(estado.st_mode):
+            raise RuntimeError(f"Modo D rechaza padre inseguro: {relativo}")
+    return ruta_workspace(workspace, relativo)
+
+
+def fsync_directorio(ruta):
+    try:
+        descriptor = os.open(ruta, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def escribir_bytes_atomico(
+    workspace, relativo, contenido, modo=0o644, *, anunciar_failpoint=False
+):
+    if not isinstance(contenido, bytes):
+        raise TypeError("la escritura atómica exige bytes")
+    destino = preparar_padre_seguro(workspace, relativo)
+    descriptor, temporal = tempfile.mkstemp(prefix=f".{destino.name}.modo-d-", dir=destino.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            os.fchmod(stream.fileno(), stat.S_IMODE(modo))
+            stream.write(contenido)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if anunciar_failpoint:
+            gestion_leases.failpoint("actualizar_antes_reemplazo_atomico")
+        # Vuelve a comprobar el destino tras escribir el temporal: un enlace creado
+        # concurrentemente nunca se sigue y queda reemplazado como entrada, no como target.
+        ruta_workspace(workspace, relativo)
+        os.replace(temporal, destino)
+        fsync_directorio(destino.parent)
+    finally:
+        if os.path.exists(temporal):
+            os.unlink(temporal)
+
+
+def estado_ruta(workspace, relativo):
+    ruta = ruta_workspace(workspace, relativo)
+    try:
+        estado_previo = os.lstat(ruta)
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(estado_previo.st_mode):
+        raise RuntimeError(f"Modo D rechaza objeto no regular: {relativo}")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(ruta, flags)
+    try:
+        estado_abierto = os.fstat(descriptor)
+        if not stat.S_ISREG(estado_abierto.st_mode):
+            raise RuntimeError(f"Modo D rechaza objeto no regular: {relativo}")
+        partes = []
+        while True:
+            bloque = os.read(descriptor, 1024 * 1024)
+            if not bloque:
+                break
+            partes.append(bloque)
+    finally:
+        os.close(descriptor)
+    return b"".join(partes), stat.S_IMODE(estado_abierto.st_mode)
+
+
+def huella_estado(estado):
+    if estado is None:
+        return "ausente"
+    contenido, modo = estado
+    return f"{stat.S_IMODE(modo):04o}:{hashlib.sha256(contenido).hexdigest()}"
+
+
+def estados_iguales(primero, segundo):
+    return huella_estado(primero) == huella_estado(segundo)
+
+
+def verificar_estado_publicado(workspace, publicado):
+    divergentes = [
+        relativo
+        for relativo, esperado in publicado.items()
+        if not estados_iguales(estado_ruta(workspace, relativo), esperado)
+    ]
+    if divergentes:
+        muestra = ", ".join(divergentes[:5])
+        raise RuntimeError(
+            "trabajo ajeno cambió una ruta que Modo D acababa de publicar; "
+            f"no stageo ni sobrescribo: {muestra}"
+        )
+
+
+def verificar_recuperable(workspace, original, publicado):
+    conflictos = []
+    for relativo in original:
+        actual = estado_ruta(workspace, relativo)
+        if not estados_iguales(actual, original[relativo]) and not estados_iguales(
+            actual, publicado[relativo]
+        ):
+            conflictos.append(relativo)
+    if conflictos:
+        raise RuntimeError(
+            "journal válido pero hay trabajo ajeno en sus rutas; conservo journal y bytes: "
+            + ", ".join(conflictos[:5])
+        )
+
+
+def restaurar_rutas(workspace, snapshot):
+    nuevas = []
+    for relativo, previo in snapshot.items():
+        ruta = ruta_workspace(workspace, relativo)
+        if previo is None:
+            if ruta.is_file() or ruta.is_symlink():
+                ruta.unlink()
+                nuevas.append(ruta.parent)
+            continue
+        contenido, modo = previo
+        escribir_bytes_atomico(workspace, relativo, contenido, modo)
+    for carpeta in sorted(set(nuevas), key=lambda p: len(p.parts), reverse=True):
+        actual = carpeta
+        while actual != workspace:
+            try:
+                actual.rmdir()
+            except OSError:
+                break
+            actual = actual.parent
+
+
+def datos_snapshot(snapshot):
+    serializado = {}
+    for relativo, previo in snapshot.items():
+        if previo is None:
+            serializado[relativo] = None
+            continue
+        contenido, modo = previo
+        serializado[relativo] = {
+            "contenido": base64.b64encode(contenido).decode("ascii"),
+            "modo": stat.S_IMODE(modo),
+            "sha256": hashlib.sha256(contenido).hexdigest(),
+        }
+    return serializado
+
+
+def snapshot_desde_datos(datos):
+    if not isinstance(datos, dict) or not datos:
+        raise ValueError("snapshot debe ser un objeto no vacío")
+    snapshot = {}
+    for relativo, previo in datos.items():
+        # Valida la ruta aunque el valor sea null antes de tocar ningún fichero.
+        if not isinstance(relativo, str):
+            raise ValueError("snapshot contiene una ruta que no es texto")
+        if previo is None:
+            snapshot[relativo] = None
+            continue
+        if not isinstance(previo, dict) or set(previo) != CLAVES_ENTRADA:
+            raise ValueError(f"entrada de snapshot inválida: {relativo}")
+        if not isinstance(previo["contenido"], str) or not isinstance(previo["modo"], int):
+            raise ValueError(f"tipos de snapshot inválidos: {relativo}")
+        if isinstance(previo["modo"], bool) or not 0 <= previo["modo"] <= 0o777:
+            raise ValueError(f"modo de snapshot inválido: {relativo}")
+        if not isinstance(previo["sha256"], str) or not RE_SHA256.fullmatch(previo["sha256"]):
+            raise ValueError(f"digest de snapshot inválido: {relativo}")
+        try:
+            contenido = base64.b64decode(previo["contenido"].encode("ascii"), validate=True)
+        except (UnicodeEncodeError, binascii.Error) as exc:
+            raise ValueError(f"base64 de snapshot inválido: {relativo}") from exc
+        if hashlib.sha256(contenido).hexdigest() != previo["sha256"]:
+            raise ValueError(f"digest de snapshot no coincide: {relativo}")
+        snapshot[relativo] = (contenido, previo["modo"])
+    return snapshot
+
+
+def validar_journal(workspace, datos):
+    if not isinstance(datos, dict) or set(datos) != CLAVES_JOURNAL:
+        raise ValueError("schema cerrado de journal inválido")
+    if datos["formato"] != 2 or datos["operacion"] != "modo-d":
+        raise ValueError("versión u operación de journal inválida")
+    try:
+        if str(uuid.UUID(datos["id"])) != datos["id"]:
+            raise ValueError("id de journal no canónico")
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ValueError("id de journal inválido") from exc
+    if datos["fase"] not in FASES_JOURNAL:
+        raise ValueError("fase de journal inválida")
+    if not isinstance(datos["punto_retorno"], str) or not RE_SHA_GIT.fullmatch(
+        datos["punto_retorno"]
+    ):
+        raise ValueError("punto de retorno inválido")
+    for clave in ("arbol_publicado", "commit"):
+        valor = datos[clave]
+        if valor is not None and (not isinstance(valor, str) or not RE_SHA_GIT.fullmatch(valor)):
+            raise ValueError(f"{clave} inválido")
+    snapshot = snapshot_desde_datos(datos["snapshot"])
+    publicado = snapshot_desde_datos(datos["publicado"])
+    if set(snapshot) != set(publicado):
+        raise ValueError("snapshot y publicado deben cubrir las mismas rutas")
+    for relativo in snapshot:
+        ruta_workspace(workspace, relativo)
+    return snapshot, publicado
+
+
+def escribir_journal(
+    workspace, sha, snapshot, fase, *, publicado=None, identificador=None,
+    arbol_publicado=None, commit=None,
+):
+    ruta = workspace / JOURNAL
+    if identificador is None and ruta.is_file():
+        try:
+            identificador = json.loads(ruta.read_text(encoding="utf-8")).get("id")
+        except (OSError, ValueError, AttributeError):
+            pass
+    datos = {
+            "formato": 2,
+            "operacion": "modo-d",
+            "id": identificador or str(uuid.uuid4()),
+            "fase": fase,
+            "punto_retorno": sha,
+            "snapshot": datos_snapshot(snapshot),
+            "publicado": datos_snapshot(publicado if publicado is not None else snapshot),
+            "arbol_publicado": arbol_publicado,
+            "commit": commit,
+        }
+    contenido = (json.dumps(datos, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+    escribir_bytes_atomico(workspace, JOURNAL.as_posix(), contenido, 0o600)
+
+
+def recuperar_journal(workspace):
+    ruta = workspace / JOURNAL
+    if not ruta.is_file():
+        return False
+    try:
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+        snapshot, publicado = validar_journal(workspace, datos)
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as exc:
+        raise RuntimeError(f"journal de Modo D ilegible; no toco nada: {exc}") from exc
+    if datos["fase"] in {"pre_commit", "committed"}:
+        codigo, cabecera = git(workspace, "show", "-s", "--format=%H%n%T%n%B", "HEAD")
+        lineas = cabecera.splitlines()
+        head = lineas[0] if len(lineas) > 0 else ""
+        arbol = lineas[1] if len(lineas) > 1 else ""
+        mensaje = "\n".join(lineas[2:])
+        trailer = re.search(
+            rf"^Modo-D-Operation:\s*{re.escape(datos['id'])}\s*$", mensaje, flags=re.M
+        )
+        commit_exacto = (
+            codigo == 0
+            and datos["arbol_publicado"] is not None
+            and arbol == datos["arbol_publicado"]
+            and trailer is not None
+            and (datos["commit"] is None or datos["commit"] == head)
+        )
+        if commit_exacto:
+            verificar_estado_publicado(workspace, publicado)
+            ruta.unlink()
+            fsync_directorio(ruta.parent)
+            print("    Cerré el journal de una actualización que ya estaba commiteada.")
+            return True
+        if datos["fase"] == "committed":
+            raise RuntimeError(
+                "journal marcado committed no coincide con HEAD/trailer/árbol; no toco nada"
+            )
+    verificar_recuperable(workspace, snapshot, publicado)
+    restaurar_rutas(workspace, snapshot)
+    ruta.unlink()
+    print("    Recuperé una actualización interrumpida desde su journal durable.")
+    return True
+
+
+def preparar_publicado(workspace, cambios, retirados, esperado, snapshot, sha, operaciones):
+    publicado = {}
+    for relativo in snapshot:
+        if relativo in retirados:
+            publicado[relativo] = None
+        elif relativo in cambios:
+            destino = PurePosixPath(relativo)
+            ejecutable = destino.suffix == ".py" or destino.parent.name == ".githooks"
+            modo = 0o755 if ejecutable else (
+                stat.S_IMODE(snapshot[relativo][1]) if snapshot[relativo] is not None else 0o644
+            )
+            publicado[relativo] = (esperado[relativo].encode("utf-8"), modo)
+        elif relativo == "METODO.json":
+            metodo = json.dumps(
+                {"formato": 1, "huella": bootstrap.huella_plantilla(), "actualizado": HOY},
+                ensure_ascii=False, indent=2, sort_keys=True,
+            ) + "\n"
+            publicado[relativo] = (metodo.encode("utf-8"), 0o644)
+        elif relativo == HISTORIAL:
+            publicado[relativo] = (contenido_historial(workspace, sha, operaciones), 0o644)
+        else:  # pragma: no cover - rutas_tocadas se construye de manera cerrada
+            raise RuntimeError(f"ruta publicada sin contenido definido: {relativo}")
+    return publicado
+
+
+def _aplicar_bajo_lease(workspace, titulo, autoridad):
+    repo_config.repo_code(workspace)
+    recuperar_journal(workspace)
+    problema_remoto = comprobar_remoto(workspace)
+    if problema_remoto:
+        print(f"\n    NO TOCO NADA: {problema_remoto}")
+        return 1
+    activas = trabajo_en_vuelo(workspace)
+    if activas:
+        print("\n    NO TOCO NADA: hay trabajo en vuelo declarado: " + ", ".join(activas))
+        return 1
+    sha, motivo = punto_de_retorno(workspace)
+    if sha is None:
+        print(f"\n    NO TOCO NADA: {motivo}")
+        return 1
+    esperado, avisos = contenido_esperado(workspace)
+    cambios, retirados, sobrantes = diferencias(workspace, esperado)
+    informe(workspace, titulo, cambios, retirados, sobrantes, avisos)
+    if not cambios and not retirados:
+        return 0
+
+    operaciones = list(cambios) + list(retirados)
+    rutas_tocadas = list(operaciones)
+    for extra in ("METODO.json", HISTORIAL):
+        if extra not in rutas_tocadas:
+            rutas_tocadas.append(extra)
+    snapshot = snapshot_rutas(workspace, rutas_tocadas)
+    publicado = preparar_publicado(
+        workspace, cambios, retirados, esperado, snapshot, sha, operaciones
+    )
+    identificador = str(uuid.uuid4())
+    escribir_journal(
+        workspace, sha, snapshot, "preparada", publicado=publicado,
+        identificador=identificador,
+    )
+
+    for indice, (relativo, estado) in enumerate(sorted(publicado.items())):
+        autoridad.assert_owner()
+        destino = ruta_workspace(workspace, relativo)
+        if estado is None:
+            if destino.exists():
+                destino.unlink()
+        else:
+            escribir_bytes_atomico(
+                workspace, relativo, estado[0], estado[1], anunciar_failpoint=True,
+            )
+        if indice == 0:
+            escribir_journal(
+                workspace, sha, snapshot, "escribiendo", publicado=publicado,
+                identificador=identificador,
+            )
+            gestion_leases.failpoint("actualizar_despues_primera_escritura")
+
+    linter_ok, _ = pasar_linter(workspace)
+    if not linter_ok:
+        verificar_recuperable(workspace, snapshot, publicado)
+        restaurar_rutas(workspace, snapshot)
+        (workspace / JOURNAL).unlink(missing_ok=True)
+        print("\n    ACTUALIZACIÓN REVERTIDA: el linter falló; solo se restauraron las "
+              "rutas que esta ejecución había tocado.")
+        return 1
+
+    autoridad.assert_owner()
+    gestion_leases.failpoint("actualizar_antes_stage_final")
+    try:
+        verificar_estado_publicado(workspace, publicado)
+    except RuntimeError:
+        limpiar_indice(workspace, sha, rutas_tocadas)
+        raise
+    escribir_journal(
+        workspace, sha, snapshot, "validada", publicado=publicado,
+        identificador=identificador,
+    )
+    try:
+        blobs = stage_exacto(workspace, publicado)
+        codigo, arbol_publicado = git(workspace, "write-tree")
+        if codigo or not RE_SHA_GIT.fullmatch(arbol_publicado):
+            raise RuntimeError(f"no pude identificar el árbol exacto publicado: {arbol_publicado}")
+        escribir_journal(
+            workspace, sha, snapshot, "pre_commit", publicado=publicado,
+            identificador=identificador, arbol_publicado=arbol_publicado,
+        )
+        gestion_leases.failpoint("actualizar_despues_stage_exact")
+        verificar_estado_publicado(workspace, publicado)
+        verificar_stage_exacto(workspace, blobs)
+    except RuntimeError:
+        limpiar_indice(workspace, sha, rutas_tocadas)
+        raise
+    codigo, salida = git(workspace, "commit", "-m",
+                         f"Método actualizado desde la herramienta ({len(operaciones)} ficheros)",
+                         "-m", f"Modo-D-Operation: {identificador}")
+    if codigo:
+        limpiar_indice(workspace, sha, rutas_tocadas)
+        verificar_recuperable(workspace, snapshot, publicado)
+        restaurar_rutas(workspace, snapshot)
+        (workspace / JOURNAL).unlink(missing_ok=True)
+        print(f"\n    ACTUALIZACIÓN REVERTIDA: no pude crear el commit final: {salida}")
+        return 1
+    gestion_leases.failpoint("actualizar_despues_commit")
+    _, commit = git(workspace, "rev-parse", "HEAD")
+    escribir_journal(
+        workspace, sha, snapshot, "committed", publicado=publicado,
+        identificador=identificador, arbol_publicado=arbol_publicado, commit=commit,
+    )
+    (workspace / JOURNAL).unlink(missing_ok=True)
+    print(f"\n    {len(cambios)} fichero(s) sobrescritos y {len(retirados)} retirado(s)"
+          " y commiteados.")
+    print(f"    Para volver atrás:  git -C {workspace} checkout {sha[:8]}")
+    print(f"    Queda anotado en:   {HISTORIAL}")
+    return 0
+
+
+def aplicar(workspace, titulo):
+    try:
+        ruta_workspace(workspace, JOURNAL.as_posix())
+        manager = gestion_leases.LeaseManager(workspace)
+        with manager.acquire(("workspace", "git-index")) as autoridad:
+            return _aplicar_bajo_lease(workspace, titulo, autoridad)
+    except gestion_leases.LeaseBusy as exc:
+        print(f"\n=== {titulo} ===\n    {workspace}\n    NO TOCO NADA: {exc}")
+        return 1
+    except RuntimeError as exc:
+        print(f"\n=== {titulo} ===\n    {workspace}\n    NO TOCO NADA: {exc}")
+        return 1
+
+
+SALTAR = {"node_modules", "__pycache__", "Library", "Applications", ".git", ".venv",
+          "venv", "worktrees", "main", "dist", "build", ".Trash", "System", "vendor"}
+RAICES_HABITUALES = ("Project", "Projects", "Proyectos", "Developer", "dev", "code",
+                     "Documents", "Desktop", "repos", "src", "work")
+
+
+def es_workspace(ruta):
+    """AGENTS.md + los planos dentro. Nunca dentro de la propia herramienta: la regla 2 de
+    su AGENTS.md prohíbe guardar proyectos aquí, así que tampoco se registran."""
+    ruta = ruta.resolve()
+    if ruta == HERRAMIENTA or HERRAMIENTA in ruta.parents:
+        return False
+    return ((ruta / "AGENTS.md").is_file()
+            and (ruta / "docs/02-flujos/planos/planos.json").is_file())
+
+
+def buscar(raices, profundidad=3):
+    """Rastrea el disco buscando workspaces de esta herramienta y devuelve sus rutas.
+
+    Existe porque el registro local solo conoce lo que se creó en ESTA máquina con esta
+    herramienta: un workspace clonado de GitHub, movido de sitio o creado en el portátil de
+    al lado no está en él, y sin esto habría que registrarlo a mano uno por uno.
+    """
+    encontrados, vistos = [], set()
+
+    def recorrer(ruta, resto):
+        try:
+            hijos = sorted(p for p in ruta.iterdir() if p.is_dir())
+        except (OSError, PermissionError):
+            return
+        for hijo in hijos:
+            if hijo.name.startswith(".") or hijo.name in SALTAR or hijo.is_symlink():
+                continue
+            real = hijo.resolve()
+            if real in vistos:
+                continue
+            vistos.add(real)
+            if es_workspace(hijo):
+                encontrados.append(hijo.resolve())
+                continue                       # dentro de un workspace no hay otro
+            if resto:
+                recorrer(hijo, resto - 1)
+
+    for raiz in raices:
+        raiz = Path(raiz).expanduser()
+        if raiz.is_dir():
+            if es_workspace(raiz):
+                encontrados.append(raiz.resolve())
+            else:
+                recorrer(raiz, profundidad)
+    return sorted(set(encontrados))
+
+
+def raices_por_defecto():
+    """Dónde mirar si el usuario no dice: su carpeta de usuario, las carpetas de trabajo
+    típicas, y el vecindario de los proyectos que ya conocemos."""
+    casa = Path.home()
+    raices = [casa] + [casa / nombre for nombre in RAICES_HABITUALES]
+    for p in proyectos.cargar()["proyectos"]:
+        padre = Path(p["ruta"]).parent
+        if padre.is_dir():
+            raices.append(padre)
+    return raices
+
+
+def cmd_buscar(args):
+    raices = args.en or raices_por_defecto()
+    print("Buscando workspaces (carpetas con AGENTS.md y planos dentro) en:")
+    for r in raices[:8]:
+        print(f"    {r}")
+    if len(raices) > 8:
+        print(f"    … y {len(raices) - 8} sitio(s) más")
+    hallados = buscar(raices, profundidad=args.profundidad)
+    conocidos = {p["ruta"] for p in proyectos.cargar()["proyectos"]}
+    nuevos = [h for h in hallados if str(h) not in conocidos]
+    print(f"\n{len(hallados)} workspace(s) encontrados · {len(nuevos)} sin registrar.")
+    for h in hallados:
+        print(f"    [{'NUEVO' if h in nuevos else 'ya registrado'}] {h}")
+    for h in nuevos:
+        proyectos.registrar(h)
+    if nuevos:
+        print(f"\nRegistrados {len(nuevos)}. Ahora: python3 visor/actualizar.py revisar --todos")
+    elif not hallados:
+        print("\nNinguno. Si están en otro sitio: "
+              "python3 visor/actualizar.py buscar --en /ruta/donde/estan")
+    return 0
+
+
+def objetivos(args):
+    datos = proyectos.cargar()["proyectos"]
+    if args.todos:
+        return datos
+    ruta = str(Path(args.ruta).expanduser().resolve())
+    encontrados = [p for p in datos if p.get("ruta") == ruta]
+    return encontrados or [{"ruta": ruta, "titulo": Path(ruta).name}]
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Lleva el método de esta herramienta a los workspaces ya creados.")
+    sub = ap.add_subparsers(dest="orden", required=True)
+    p_buscar = sub.add_parser("buscar",
+                              help="rastrea el disco, encuentra workspaces y los registra")
+    p_buscar.add_argument("--en", nargs="*", metavar="RUTA",
+                          help="dónde mirar (por defecto: tu carpeta de usuario y las de "
+                               "trabajo habituales)")
+    p_buscar.add_argument("--profundidad", type=int, default=3,
+                          help="cuántas carpetas hacia dentro (defecto: 3)")
+    p_buscar.set_defaults(func=cmd_buscar)
+    for nombre, ayuda in (("revisar", "informe; no toca nada"),
+                          ("aplicar", "sobrescribe el método, con punto de retorno en git")):
+        p = sub.add_parser(nombre, help=ayuda)
+        grupo = p.add_mutually_exclusive_group(required=True)
+        grupo.add_argument("ruta", nargs="?", help="carpeta del workspace <proyecto>-agents")
+        grupo.add_argument("--todos", action="store_true", help="todos los registrados")
+    args = ap.parse_args()
+    if args.orden == "buscar":
+        return args.func(args)
+
+    lista = objetivos(args)
+    if not lista:
+        print("No hay proyectos registrados. Regístralos con "
+              "`python3 visor/proyectos.py registrar RUTA`.")
+        return 0
+    print(f"Método de esta herramienta: huella {bootstrap.huella_plantilla()[:12]}…")
+    salida, pendientes = 0, 0
+    for entrada in lista:
+        ruta = Path(entrada["ruta"])
+        titulo = entrada.get("titulo", ruta.name)
+        if not ruta.is_dir():
+            print(f"\n=== {titulo} ===\n    {ruta}\n    NO ENCONTRADO (¿movido o borrado?)")
+            continue
+        try:
+            if args.orden == "revisar":
+                repo_config.repo_code(ruta)
+                esperado, avisos = contenido_esperado(ruta)
+                cambios, retirados, sobrantes = diferencias(ruta, esperado)
+                informe(ruta, titulo, cambios, retirados, sobrantes, avisos)
+                pendientes += 1 if cambios or retirados else 0
+            else:
+                salida |= aplicar(ruta, titulo)
+        except (OSError, repo_config.RepoConfigError) as e:
+            # Un proyecto roto no puede llevarse por delante la revisión de los demás.
+            print(f"\n=== {titulo} ===\n    {ruta}\n    NO PUDE LEERLO: {e}")
+            salida = 1
+    if args.orden == "revisar":
+        print(f"\n{pendientes} proyecto(s) con cambios pendientes de {len(lista)} revisado(s).")
+        if pendientes:
+            print("Para aplicarlos: python3 visor/actualizar.py aplicar --todos "
+                  "(o con la ruta de uno). Antes de tocar exige HEAD, árbol e índice "
+                  "limpios; ese HEAD permite deshacer con un checkout.")
+    return salida
+
+
+if __name__ == "__main__":
+    sys.exit(main())

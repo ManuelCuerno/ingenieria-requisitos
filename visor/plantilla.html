@@ -1,0 +1,1343 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Planos del proyecto · ingeniería de requisitos</title>
+<style>
+  /* PLANTILLA FIJA v2.2 (lateral obligatorio + pestañas). Los proyectos solo
+     aportan datos (planos.json). Colores validados para daltonismo. */
+  /* ---------- paleta (misma que manual-ingenieria-requisitos.html) ----------
+     Claro por defecto, oscuro automático según el sistema, y data-theme para forzarlo.
+     Los papeles semánticos se conservan para daltonismo: persona = cálido (warn),
+     automático·código = azul (accent), automático·IA = verde (ok). */
+  :root {
+    --paper: #F3F5F1; --sheet: #FBFCFA; --panel: #FBFCFA;
+    --ink: #16202A; --muted: #4A5A66; --faint: #7C8C96;
+    --line: #CDD5CE; --line-soft: #E1E7E0;
+    --accent: #1F5673; --accent-bg: #E4EDF2;
+    --ok: #3D6B4C; --ok-bg: #E3EDE4;
+    --warn: #8E6410; --warn-bg: #F2EBDA;
+    --fail: #A03127; --fail-bg: #F4E4E1;
+    --alt: #5B4A78; --alt-bg: #ECE8F3;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0F1418; --sheet: #141B21; --panel: #141B21;
+      --ink: #DEE6E9; --muted: #9DAEB8; --faint: #6E7F8A;
+      --line: #2B363E; --line-soft: #202A31;
+      --accent: #7FB4D4; --accent-bg: #16242E;
+      --ok: #77B189; --ok-bg: #17251C;
+      --warn: #CE9F45; --warn-bg: #251F12;
+      --fail: #E08578; --fail-bg: #2A1815;
+      --alt: #A99AC8; --alt-bg: #1E1A26;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0F1418; --sheet: #141B21; --panel: #141B21;
+    --ink: #DEE6E9; --muted: #9DAEB8; --faint: #6E7F8A;
+    --line: #2B363E; --line-soft: #202A31;
+    --accent: #7FB4D4; --accent-bg: #16242E;
+    --ok: #77B189; --ok-bg: #17251C;
+    --warn: #CE9F45; --warn-bg: #251F12;
+    --fail: #E08578; --fail-bg: #2A1815;
+    --alt: #A99AC8; --alt-bg: #1E1A26;
+  }
+  :root[data-theme="light"] {
+    --paper: #F3F5F1; --sheet: #FBFCFA; --panel: #FBFCFA;
+    --ink: #16202A; --muted: #4A5A66; --faint: #7C8C96;
+    --line: #CDD5CE; --line-soft: #E1E7E0;
+    --accent: #1F5673; --accent-bg: #E4EDF2;
+    --ok: #3D6B4C; --ok-bg: #E3EDE4;
+    --warn: #8E6410; --warn-bg: #F2EBDA;
+    --fail: #A03127; --fail-bg: #F4E4E1;
+    --alt: #5B4A78; --alt-bg: #ECE8F3;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { background: var(--paper); color: var(--ink); font: 16px/1.5 var(--sans); }
+  .pagina { max-width: 920px; margin: 0 auto; padding: 32px 20px 90px; }
+
+  header { position: relative; padding-right: 44px; }
+  header .marca { font-size: 11px; font-weight: bold; letter-spacing: .14em; text-transform: uppercase; color: var(--warn); }
+  .boton-tema { position: absolute; top: -2px; right: 0; width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--line); background: var(--sheet); color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer; }
+  .boton-tema:hover { border-color: var(--accent); color: var(--ink); }
+  .boton-tema:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  h1 { font-size: 25px; line-height: 1.2; margin: 6px 0 2px; }
+  .sub { color: var(--muted); font-size: 13.5px; }
+
+  nav.pestanas { position: sticky; top: 0; z-index: 5; display: flex; gap: 6px; overflow-x: auto; padding: 12px 0 10px; margin-top: 16px; background: var(--paper); box-shadow: 0 1px 0 var(--line); }
+  nav.pestanas button { white-space: nowrap; font: bold 13px var(--sans); color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px; background: var(--sheet); cursor: pointer; }
+  nav.pestanas button:hover { border-color: var(--warn); color: var(--ink); }
+  nav.pestanas button:focus-visible { outline: 2px solid var(--warn); outline-offset: 2px; }
+  nav.pestanas button.activa { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+
+  .aviso-flotante { display: none; position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 20; width: calc(100% - 40px); max-width: 680px; border: 2px solid var(--warn); border-radius: 10px; background: var(--warn-bg); padding: 10px 14px; font-size: 13.5px; box-shadow: 0 4px 16px rgba(11, 11, 11, .18); }
+  .aviso-flotante.visible { display: block; }
+
+  .seccion { display: none; margin-top: 26px; }
+  .seccion.activa { display: block; }
+  .seccion > h2 { font-size: 20px; margin-bottom: 4px; }
+  .seccion > .nota { font-size: 13px; color: var(--faint); margin-bottom: 14px; max-width: 65ch; }
+
+  .contrato { border: 1px solid var(--line); border-left: 4px solid var(--warn); border-radius: 8px; padding: 12px 16px; background: var(--sheet); font-size: 15px; max-width: 70ch; }
+  .contrato .exito { font-size: 13px; color: var(--muted); margin-top: 6px; }
+  .actores { margin-top: 14px; font-size: 13px; color: var(--muted); }
+  .actores span { display: inline-block; background: var(--line-soft); border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; margin: 2px 4px 0 0; }
+  .progreso { margin-top: 18px; }
+  .progreso .fila { display: flex; gap: 8px; align-items: baseline; font-size: 14px; margin: 4px 0; }
+  .progreso .si { color: var(--ink); }
+  .progreso .no { color: var(--faint); }
+  .progreso .na { color: var(--muted); }
+  .puntito { display: inline-block; width: 9px; height: 9px; border-radius: 50%; }
+  .puntito.si { background: var(--ok); }
+  .puntito.no { background: var(--line); }
+  .puntito.na { background: var(--faint); }
+
+  .leyenda { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; margin: 4px 0 6px; padding: 12px 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--sheet); font-size: 12.5px; color: var(--muted); }
+  .leyenda i { display: inline-block; vertical-align: -3px; margin-right: 7px; font-style: normal; }
+  .m-humano { width: 18px; height: 14px; background: var(--warn-bg); border: 2px solid var(--warn); border-radius: 7px; }
+  .m-estatico { width: 18px; height: 14px; background: var(--accent-bg); border: 2px solid var(--accent); box-shadow: inset 2px 0 0 var(--accent), inset -2px 0 0 var(--accent); }
+  .m-ia { width: 20px; height: 14px; background: var(--ok); clip-path: polygon(5px 0, 15px 0, 20px 7px, 15px 14px, 5px 14px, 0 7px); }
+  .m-decision { width: 14px; height: 14px; background: var(--line-soft); border: 2px solid var(--faint); transform: rotate(45deg) scale(.82); }
+  .m-externo { width: 18px; height: 14px; background: var(--paper); border: 2px dashed var(--faint); border-radius: 7px; }
+  .m-terminal { width: 14px; height: 14px; background: var(--ink); border-radius: 50%; }
+
+  .flujo { margin-top: 34px; }
+  details.flujo-hoy { margin-top: 34px; border: 1px solid var(--line); border-radius: 10px; background: var(--sheet); padding: 12px 16px; }
+  details.flujo-hoy > summary { cursor: pointer; font-weight: bold; font-size: 14.5px; color: var(--muted); }
+  details.flujo-hoy > summary:focus-visible { outline: 2px solid var(--warn); outline-offset: 3px; border-radius: 4px; }
+  details.flujo-hoy .flujo { margin-top: 10px; }
+  .flujo-cabecera { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+  .flujo h3 { font-size: 17px; }
+  .chip { font-size: 11px; font-weight: bold; letter-spacing: .08em; text-transform: uppercase; border-radius: 999px; padding: 3px 10px; }
+  .chip-hoy { background: var(--line-soft); color: var(--muted); border: 1px solid var(--line); }
+  .chip-futuro { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn); }
+  .chip-neutro { background: var(--line-soft); color: var(--muted); border: 1px solid var(--line); }
+  .chip-hecho { background: var(--ink); color: var(--paper); border: 1px solid var(--ink); }
+  .chip-obra { background: var(--accent-bg); color: var(--accent); border: 1px solid var(--accent); }
+  .chip-spec { background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok); }
+  .indice-mapa { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 20px; }
+  .indice-mapa button { font: 12px var(--sans); border: 1px solid var(--line); border-radius: 999px; padding: 4px 11px; background: var(--sheet); cursor: pointer; color: var(--ink); }
+  .indice-mapa button:hover { border-color: var(--warn); }
+  .indice-mapa button:focus-visible { outline: 2px solid var(--warn); outline-offset: 2px; }
+  .pm { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .pm-entregada { background: var(--ink); } .pm-en.obra, .pm-obra { background: var(--accent); }
+  .pm-especificada { background: var(--ok); } .pm-entrevista { background: var(--warn); } .pm-sin { background: var(--line); }
+  .fila-resaltada { outline: 2px solid var(--warn); outline-offset: 4px; border-radius: 4px; }
+
+  body.con-menu .pagina { max-width: 1200px; }
+  .cuerpo { display: flex; gap: 24px; align-items: flex-start; }
+  .panel { flex: 1; min-width: 0; }
+  .menu-actividades { flex: 0 0 235px; position: sticky; top: 0; max-height: 100vh; overflow-y: auto; padding: 14px 6px 20px 0; }
+  .menu-actividades .titulo-menu { font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: .12em; color: var(--muted); margin: 0 0 8px 10px; }
+  .menu-actividades .menu-vacio { font-size: 12.5px; line-height: 1.4; color: var(--faint); padding: 7px 10px; }
+  .menu-actividades .grupo { font-size: 10.5px; font-weight: bold; text-transform: uppercase; letter-spacing: .1em; color: var(--faint); margin: 14px 0 4px 10px; }
+  .menu-actividades button { display: block; width: 100%; text-align: left; font: 13px/1.35 var(--sans); padding: 7px 10px; border: 0; background: none; border-radius: 8px; cursor: pointer; color: var(--ink); }
+  .menu-actividades button:hover { background: var(--line-soft); }
+  .menu-actividades button:focus-visible { outline: 2px solid var(--warn); outline-offset: 1px; }
+  .menu-actividades button.activo { background: var(--ink); color: var(--paper); }
+  .menu-filtros { display: grid; gap: 6px; margin: 0 6px 10px; }
+  .menu-filtros input, .menu-filtros select { width: 100%; border: 1px solid var(--line); border-radius: 7px; background: var(--paper); color: var(--ink); padding: 7px 8px; font: 12px var(--sans); }
+  .menu-filtros input:focus, .menu-filtros select:focus { border-color: var(--warn); outline: 2px solid var(--warn-bg); }
+  @media (max-width: 760px) {
+    .pagina { padding-left: 12px; padding-right: 12px; }
+    .cuerpo { gap: 12px; }
+    .menu-actividades { flex: 0 0 34vw; min-width: 120px; max-width: 180px; }
+    .menu-actividades button { overflow-wrap: anywhere; }
+  }
+  .flujo .descripcion { font-size: 13.5px; color: var(--muted); max-width: 65ch; }
+  .lienzo { margin-top: 16px; }
+
+  .paso { max-width: 460px; margin: 0 auto; text-align: center; font-size: 14.5px; line-height: 1.35; }
+  .paso .quien { font-weight: bold; }
+  .etiqueta-tipo { display: block; font-size: 10px; font-weight: bold; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 3px; }
+  .humano .etiqueta-tipo { color: var(--warn); }
+  .estatico .etiqueta-tipo { color: var(--accent); }
+  .ia .etiqueta-tipo { color: var(--ok); }
+  .decision .etiqueta-tipo { color: var(--muted); }
+  .externo .etiqueta-tipo { color: var(--muted); }
+  .externo { background: var(--paper); border: 2px dashed var(--faint); border-radius: 14px; padding: 10px 18px; }
+  .resumen-desc { font-size: 15.5px; max-width: 70ch; margin-bottom: 16px; }
+  .humano { background: var(--warn-bg); border: 2px solid var(--warn); border-radius: 14px; padding: 10px 18px; }
+  .estatico { background: var(--accent-bg); border: 2px solid var(--accent); padding: 10px 26px; box-shadow: inset 5px 0 0 -3px var(--accent), inset -5px 0 0 -3px var(--accent); }
+  .ia-borde { max-width: 470px; margin: 0 auto; background: var(--ok); clip-path: polygon(19px 0, calc(100% - 19px) 0, 100% 50%, calc(100% - 19px) 100%, 19px 100%, 0 50%); padding: 2px 3px; }
+  .ia { background: var(--ok-bg); padding: 10px 34px; max-width: none; clip-path: polygon(18px 0, calc(100% - 18px) 0, 100% 50%, calc(100% - 18px) 100%, 18px 100%, 0 50%); }
+  .decision-borde { width: max-content; max-width: 420px; margin: 0 auto; background: var(--faint); clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); padding: 2px; }
+  .decision { background: var(--line-soft); padding: 22px 56px; font-size: 13.5px; max-width: none; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+  .terminal { width: 54px; height: 54px; border-radius: 50%; background: var(--ink); color: var(--paper); display: flex; align-items: center; justify-content: center; font-size: 11.5px; margin: 0 auto; }
+  .conector { width: 0; height: 30px; border-left: 2px solid var(--faint); margin: 0 auto; position: relative; }
+  .conector.discontinuo { border-left-style: dashed; }
+  .conector::after { content: ""; position: absolute; bottom: 0; left: -6px; border: 5px solid transparent; border-top: 7px solid var(--faint); }
+  .etiqueta-camino { width: max-content; max-width: 300px; margin: -4px auto 0; font-size: 12px; color: var(--muted); background: var(--paper); padding: 0 6px; position: relative; top: -20px; margin-bottom: -18px; }
+  .rama { margin: 12px 0 12px 14%; padding: 10px 0 2px 20px; border-left: 2px dashed var(--faint); border-radius: 0 0 0 8px; }
+  .rama .titulo-rama { font-size: 12.5px; font-weight: bold; color: var(--muted); margin-bottom: 8px; text-align: left; }
+  .rama .paso { max-width: 400px; }
+  .rama .conector { height: 22px; }
+  .vuelta { font-size: 11.5px; color: var(--faint); text-align: left; margin-top: 6px; }
+
+  .tarjeta { border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; background: var(--sheet); margin: 0 0 12px; }
+  .tarjeta-cabecera { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .tarjeta-cabecera .nombre { font-weight: bold; font-size: 15px; }
+  .tarjeta .objetivo { font-size: 13px; color: var(--muted); margin-top: 4px; }
+  .nombre { font-weight: bold; font-size: 15px; }
+  .idtag { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: var(--line-soft); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; }
+  .mini-titulo { font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: .1em; color: var(--faint); margin: 14px 0 6px; }
+  ul.lista { padding-left: 20px; display: grid; gap: 6px; font-size: 14px; }
+  ul.lista li::marker { color: var(--warn); }
+  .req { display: flex; gap: 8px; align-items: baseline; font-size: 14px; margin: 4px 0; }
+  .criterio { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 6px 0; font-size: 13.5px; }
+  .criterio b { color: var(--muted); }
+  .tabla-envoltorio { overflow-x: auto; margin: 8px 0; }
+  table { border-collapse: collapse; font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--sheet); font-size: 12.5px; }
+  td.centrado { text-align: center; }
+
+  dl.vocab { display: grid; gap: 6px; font-size: 14px; }
+  dl.vocab dt { font-weight: bold; display: inline; }
+  dl.vocab dd { display: inline; margin-left: 6px; color: var(--muted); }
+  .aviso-preguntas { border-left: 4px solid var(--warn); }
+
+  pre.doc { white-space: pre-wrap; word-break: break-word; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--sheet); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; overflow-x: auto; margin-bottom: 16px; }
+
+  .error { margin-top: 30px; border: 2px solid var(--fail); border-radius: 10px; padding: 16px 18px; background: var(--fail-bg); color: var(--fail); font-size: 14px; }
+  footer { margin-top: 60px; font-size: 12px; color: var(--faint); text-align: center; }
+</style>
+</head>
+<body class="con-menu">
+<script>
+  /* Tema: por defecto manda el sistema (prefers-color-scheme). Si el usuario toca el botón,
+     su elección manda y se recuerda. Se aplica ANTES de pintar para no dar un fogonazo. */
+  (function () {
+    var GUARDADO = "visor-tema";
+    var raiz = document.documentElement;
+    var elegido = null;
+    try { elegido = localStorage.getItem(GUARDADO); } catch (e) { elegido = null; }
+    if (elegido === "dark" || elegido === "light") raiz.dataset.theme = elegido;
+
+    function oscuroAhora() {
+      if (raiz.dataset.theme) return raiz.dataset.theme === "dark";
+      return window.matchMedia("(prefers-color-scheme: dark)").matches;
+    }
+    function pintarBoton(boton) {
+      var oscuro = oscuroAhora();
+      boton.textContent = oscuro ? "☀" : "☾";
+      boton.title = oscuro ? "Cambiar a claro" : "Cambiar a oscuro";
+    }
+    document.addEventListener("DOMContentLoaded", function () {
+      var boton = document.getElementById("boton-tema");
+      if (!boton) return;
+      pintarBoton(boton);
+      boton.addEventListener("click", function () {
+        var nuevo = oscuroAhora() ? "light" : "dark";
+        raiz.dataset.theme = nuevo;
+        try { localStorage.setItem(GUARDADO, nuevo); } catch (e) { /* sin memoria, da igual */ }
+        pintarBoton(boton);
+      });
+      window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function () {
+        if (!raiz.dataset.theme) pintarBoton(boton);
+      });
+    });
+  })();
+</script>
+  <div class="pagina">
+    <header>
+      <button type="button" id="boton-tema" class="boton-tema" aria-label="Cambiar entre claro y oscuro"></button>
+      <div class="marca">ingeniería de requisitos · planos del proyecto</div>
+      <h1 id="titulo">Cargando…</h1>
+      <div class="sub" id="proyecto"></div>
+    </header>
+
+    <div class="aviso-flotante" id="banner">⚠ El visor perdió la conexión.
+    Pide a tu IA que vuelva a abrir la sesión y recarga esta página.</div>
+    <div class="aviso-flotante" id="bannerDatos">⚠ Los últimos datos guardados
+    aún no son válidos; estás viendo la última versión buena. Se actualizará
+    solo cuando tu IA termine de escribir.</div>
+
+    <div class="cuerpo">
+      <aside class="menu-actividades" id="menuIzq"
+             aria-label="Flujos de la aplicación">
+        <div class="titulo-menu">Flujos</div>
+        <div class="menu-filtros">
+          <input id="buscarFlujos" type="search" placeholder="Buscar flujo…">
+          <select id="filtroFlujos">
+            <option value="">Todos</option>
+            <option value="futuro">Con la app</option>
+            <option value="hoy">Cómo funciona hoy</option>
+            <option value="usuario">Dicho por el usuario</option>
+            <option value="codigo">Leído del código</option>
+            <option value="inferido">Inferido</option>
+            <option value="implementado">Implementado</option>
+            <option value="parcial">Parcial</option>
+            <option value="no implementado">No implementado</option>
+            <option value="especificada">Especificada</option>
+            <option value="sin empezar">Sin empezar</option>
+          </select>
+        </div>
+        <div id="menuEntradas"><div class="menu-vacio">Cargando los flujos…</div></div>
+      </aside>
+      <div class="panel">
+        <nav class="pestanas" id="pestanas" hidden></nav>
+        <main id="contenido"></main>
+        <div class="error" id="error" hidden></div>
+      </div>
+    </div>
+
+    <footer>Plantilla fija v2.2 · la página se actualiza sola cuando tu IA
+    añade contenido · la sesión local permanece activa hasta que se cierre
+    el proceso.</footer>
+  </div>
+
+<script>
+"use strict";
+const TIPOS_ACCION = ["humano", "estatico", "ia", "externo"];
+let ultimaFoto = "";
+let docSpec = null;
+let docEncargo = null;
+let cargando = false;
+let seleccion = "mapa";
+let pestanaActiva = "resumen";
+let historialActual = [];
+let comparacionActual = { hay_aprobacion: false, identico: false, planos: {} };
+
+function el(tag, clase, texto) {
+  const n = document.createElement(tag);
+  if (clase) n.className = clase;
+  if (texto !== undefined) n.textContent = texto;
+  return n;
+}
+
+async function apiJSON(ruta, opciones) {
+  const respuesta = await fetch(ruta, Object.assign(
+    { cache: "no-store" }, opciones || {}
+  ));
+  let datos = {};
+  try { datos = await respuesta.json(); } catch (_) {}
+  if (!respuesta.ok) throw new Error(datos.error || ("HTTP " + respuesta.status));
+  return datos;
+}
+
+function fallo(msg) {
+  const e = document.getElementById("error");
+  e.textContent = "No se pudo pintar el proyecto: " + msg + " Revisa planos.json contra visor/esquema.json.";
+  e.hidden = false;
+  document.getElementById("titulo").textContent = "Datos no válidos";
+}
+
+/* ---------- validación (SIEMPRE antes de tocar el DOM) ---------- */
+
+function validarPaso(p, flujo) {
+  if (p.tipo === "decision") {
+    if (p.clase !== "regla" && p.clase !== "excepcion") throw new Error('decisión sin "clase" en "' + flujo + '".');
+    if (!p.condicion) throw new Error('decisión sin "condicion" en "' + flujo + '".');
+    const rs = Array.isArray(p.ramas) ? p.ramas : (p.rama ? [p.rama] : []);
+    if (!rs.length) throw new Error('decisión "' + p.condicion + '" sin rama ni ramas.');
+    rs.forEach(r => {
+      if (!r || !r.etiqueta || !Array.isArray(r.pasos)) throw new Error('decisión "' + p.condicion + '" con rama sin {etiqueta, pasos}.');
+      r.pasos.forEach(x => validarPaso(x, flujo));
+    });
+  } else if (TIPOS_ACCION.includes(p.tipo)) {
+    if (!p.texto) throw new Error('paso "' + p.tipo + '" sin "texto" en "' + flujo + '".');
+  } else {
+    throw new Error('tipo de paso desconocido: "' + p.tipo + '".');
+  }
+}
+
+function validarTodo(d) {
+  if (!d || d.version !== 2) throw new Error('falta "version": 2.');
+  if (typeof d.titulo !== "string" || !d.titulo) throw new Error('falta "titulo".');
+  (Array.isArray(d.flujos) ? d.flujos : []).forEach(f => {
+    if (!f || !f.titulo || !Array.isArray(f.pasos)) throw new Error("flujo mal formado.");
+    f.pasos.forEach(p => validarPaso(p, f.titulo));
+  });
+}
+
+/* ---------- flujos: el diagrama de actividades ---------- */
+
+const ETIQUETAS = { humano: "Persona", estatico: "Automático · código", ia: "Automático · IA", externo: "Tercero externo" };
+
+function ponerTexto(nodo, p) {
+  nodo.appendChild(el("span", "etiqueta-tipo", ETIQUETAS[p.tipo]));
+  nodo.appendChild(document.createTextNode(p.texto));
+  if (p.quien) {
+    nodo.appendChild(document.createTextNode(" · "));
+    nodo.appendChild(el("span", "quien", p.quien));
+  }
+}
+
+function bloqueAccion(p) {
+  if (p.tipo === "ia") {
+    const borde = el("div", "ia-borde");
+    const b = el("div", "paso ia");
+    ponerTexto(b, p);
+    borde.appendChild(b);
+    return borde;
+  }
+  const b = el("div", "paso " + p.tipo);
+  ponerTexto(b, p);
+  return b;
+}
+
+function conector(discontinuo, etiqueta) {
+  const frag = document.createDocumentFragment();
+  frag.appendChild(el("div", "conector" + (discontinuo ? " discontinuo" : "")));
+  if (etiqueta) frag.appendChild(el("div", "etiqueta-camino", etiqueta));
+  return frag;
+}
+
+function pintarPasos(destino, pasos, dentroDeRama, flujoId, camino) {
+  pasos.forEach((p, indice) => {
+    const posicion = (camino || []).concat(indice);
+    destino.appendChild(conector(!!dentroDeRama));
+    if (p.tipo === "decision") {
+      const borde = el("div", "decision-borde");
+      const rombo = el("div", "paso decision");
+      rombo.appendChild(el("span", "etiqueta-tipo", p.clase === "excepcion" ? "⚠ Excepción" : "⚑ Regla"));
+      rombo.appendChild(document.createTextNode(p.condicion));
+      if (p.quien) {
+        rombo.appendChild(document.createTextNode(" · "));
+        rombo.appendChild(el("span", "quien", p.quien));
+      }
+      borde.appendChild(rombo);
+      destino.appendChild(borde);
+      const rs = Array.isArray(p.ramas) ? p.ramas : [p.rama];
+      rs.forEach((r, indiceRama) => {
+        const rama = el("div", "rama");
+        rama.appendChild(el("div", "titulo-rama", (p.clase === "excepcion" ? "⚠ " : "⚑ ") + r.etiqueta));
+        pintarPasos(
+          rama, r.pasos, true, flujoId,
+          posicion.concat("rama-" + indiceRama)
+        );
+        rama.appendChild(el("div", "vuelta", r.termina ? "✕ aquí termina este camino" : "…y vuelve al flujo"));
+        destino.appendChild(rama);
+      });
+      if (p.sigue) destino.appendChild(el("div", "etiqueta-camino", p.sigue));
+    } else {
+      destino.appendChild(bloqueAccion(p));
+    }
+  });
+}
+
+/* ---------- utilidades ---------- */
+
+function tabla(cabeceras, filas) {
+  const env = el("div", "tabla-envoltorio");
+  const t = el("table");
+  const tr = el("tr");
+  cabeceras.forEach(c => tr.appendChild(el("th", null, c)));
+  t.appendChild(tr);
+  filas.forEach(f => {
+    const r = el("tr");
+    f.forEach(celda => r.appendChild(el("td", celda === "✓" || celda === "" ? "centrado" : null, celda)));
+    t.appendChild(r);
+  });
+  env.appendChild(t);
+  return env;
+}
+
+function textoNunca(valor) {
+  if (typeof valor === "string") return valor;
+  const refs = [valor.requisito, valor.criterio].filter(Boolean).join(" · ");
+  return (valor.accion || "") + (refs ? " (" + refs + ")" : "");
+}
+
+/* ---------- pestañas ---------- */
+
+function tabResumen(d, presentes) {
+  const s = el("section", "seccion");
+  s.appendChild(el("h2", null, "Resumen"));
+  if (d.descripcion) {
+    s.appendChild(el("div", "mini-titulo", "Qué es este proyecto"));
+    s.appendChild(el("p", "resumen-desc", d.descripcion));
+  }
+  if (d.definicion || d.cobertura) {
+    const estado = el("div", "tarjeta");
+    estado.appendChild(el("div", "mini-titulo", "Estado de estos planos"));
+    if (d.definicion) {
+      estado.appendChild(el("div", "req", "Diseño: " +
+        (d.definicion.estado || "borrador") + " · " +
+        (d.definicion.modo || "sin modo")));
+    }
+    if (d.cobertura) {
+      estado.appendChild(el("div", "req", "Código actual: " +
+        (d.cobertura.estado || "no verificado")));
+    }
+    const supuestos = (d.definicion || {}).supuestos || [];
+    if (supuestos.length) {
+      const det = el("details");
+      det.appendChild(el("summary", null, supuestos.length + " supuesto(s) propuesto(s) para revisar"));
+      const ul = el("ul", "lista");
+      supuestos.forEach(x => ul.appendChild(el("li", null, x.texto + " · " + x.estado)));
+      det.appendChild(ul);
+      estado.appendChild(det);
+    }
+    s.appendChild(estado);
+  }
+  s.appendChild(el("div", "mini-titulo", "El objetivo"));
+  if (d.contrato && d.contrato.frase) {
+    const c = el("div", "contrato");
+    c.appendChild(document.createTextNode(d.contrato.frase));
+    if (d.contrato.exito) {
+      const lista = Array.isArray(d.contrato.exito) ? d.contrato.exito : [d.contrato.exito];
+      const t = el("div", "exito", "Sabremos que funcionó si:");
+      const ul = el("ul", "lista");
+      lista.forEach(x => ul.appendChild(el("li", null, x)));
+      t.appendChild(ul);
+      c.appendChild(t);
+    }
+    s.appendChild(c);
+  } else {
+    s.appendChild(el("div", "nota", "Todavía no hay frase de contrato: aparecerá aquí en cuanto la acordéis."));
+  }
+  if (Array.isArray(d.actores) && d.actores.length) {
+    const a = el("div", "actores");
+    a.appendChild(document.createTextNode("Quién aparece: "));
+    d.actores.forEach(x => a.appendChild(el("span", null, x.nombre)));
+    s.appendChild(a);
+  }
+  if (Array.isArray(d.recorridos) && d.recorridos.length) {
+    s.appendChild(el("div", "mini-titulo", "Qué se va a construir, en este orden"));
+    d.recorridos.forEach((r, i) => {
+      const fila = el("div", "req");
+      if (r.id) fila.appendChild(el("span", "idtag", r.id));
+      fila.appendChild(el("span", null, r.nombre + (i === 0 ? " (la primera entrega)" : "")));
+      s.appendChild(fila);
+    });
+  }
+  if (Array.isArray(d.vocabulario) && d.vocabulario.length) {
+    s.appendChild(el("div", "mini-titulo", "Vocabulario del negocio"));
+    const dl = el("dl", "vocab");
+    d.vocabulario.forEach(v => {
+      const linea = el("div");
+      linea.appendChild(el("dt", null, v.termino + ":"));
+      linea.appendChild(el("dd", null, v.significado));
+      dl.appendChild(linea);
+    });
+    s.appendChild(dl);
+  }
+  const prog = el("div", "progreso");
+  prog.appendChild(el("div", "mini-titulo", "Qué hay ya en los planos"));
+  presentes.forEach(([titulo, estado, detalle]) => {
+    const clase = estado === "no-aplica" ? "na" : (estado ? "si" : "no");
+    const sufijo = estado === "no-aplica"
+      ? " (no aplica)"
+      : (estado ? (detalle ? ": " + detalle : "") : " (pendiente)");
+    const fila = el("div", "fila " + clase);
+    fila.appendChild(el("span", "puntito " + clase));
+    fila.appendChild(el("span", null, titulo + sufijo));
+    prog.appendChild(fila);
+  });
+  s.appendChild(prog);
+  return s;
+}
+
+const CHIP_ACTIVIDAD = { "sin empezar": "chip-neutro", "en entrevista": "chip-futuro", "especificada": "chip-spec", "en obra": "chip-obra", "entregada": "chip-hecho" };
+
+const PM_ESTADO = { "entregada": "pm-entregada", "en obra": "pm-obra", "especificada": "pm-especificada", "en entrevista": "pm-entrevista", "sin empezar": "pm-sin" };
+
+function tabMapa(d) {
+  const s = el("section", "seccion");
+  s.appendChild(el("h2", null, "El mapa de la aplicación"));
+  s.appendChild(el("div", "nota", "Una aplicación grande son muchas actividades (hacer un pedido, emitir una factura, dar un alta...). Este mapa las tiene todas, agrupadas por zonas del negocio, con su estado. Cada actividad se detalla en su propia sesión y tiene sus propios planos; este mapa es el panel de control del proyecto entero. Pulsa una en el índice para saltar a ella."));
+
+  const filas = {};
+  const indice = el("div", "indice-mapa");
+  const cuerpoCards = [];
+  const areas = [];
+  d.actividades.forEach(a => { if (!areas.includes(a.area)) areas.push(a.area); });
+  areas.forEach(area => {
+    const c = el("div", "tarjeta");
+    c.appendChild(el("div", "nombre", area));
+    d.actividades.filter(a => a.area === area).forEach(a => {
+      const fila = el("div", "req");
+      fila.appendChild(el("span", "chip " + (CHIP_ACTIVIDAD[a.estado] || "chip-neutro"), a.estado || "sin empezar"));
+      if (a.cobertura && a.cobertura.estado) {
+        fila.appendChild(el("span", "chip chip-neutro", a.cobertura.estado));
+      }
+      const cuerpo = el("span");
+      cuerpo.appendChild(document.createTextNode(a.nombre));
+      if (a.resumen) cuerpo.appendChild(el("span", "objetivo", " · " + a.resumen));
+      if (Array.isArray(a.depende_de) && a.depende_de.length) cuerpo.appendChild(el("span", "objetivo", " · necesita antes: " + a.depende_de.join(", ")));
+      fila.appendChild(cuerpo);
+      c.appendChild(fila);
+      filas[a.id] = fila;
+
+      const b = el("button");
+      b.appendChild(el("span", "pm " + (PM_ESTADO[a.estado] || "pm-sin")));
+      b.appendChild(document.createTextNode(a.nombre));
+      b.title = "abrir esta actividad · " + (a.estado || "sin empezar") + " · " + area;
+      b.addEventListener("click", () => seleccionar(a.id));
+      indice.appendChild(b);
+    });
+    cuerpoCards.push(c);
+  });
+  s.appendChild(indice);
+  cuerpoCards.forEach(c => s.appendChild(c));
+  return s;
+}
+
+function tabEpisodios(d) {
+  const s = el("section", "seccion");
+  s.appendChild(el("h2", null, "Casos reales"));
+  s.appendChild(el("div", "nota", "Cosas que pasaron de verdad en tu negocio, con sus nombres y sus números. Sirven para que el programador entienda el porqué de cada regla y para probar la app con casos de verdad, no inventados."));
+  d.episodios.forEach(e2 => {
+    const c = el("div", "tarjeta");
+    c.appendChild(el("div", "objetivo", e2.texto));
+    (e2.refs || []).forEach(rf => { c.appendChild(el("span", "idtag", rf)); c.appendChild(document.createTextNode(" ")); });
+    s.appendChild(c);
+  });
+  return s;
+}
+
+function pintarFlujo(f) {
+  const bloc = el("div", "flujo");
+  bloc.id = "flujo-" + f.id;
+  bloc.tabIndex = -1;
+  const cab = el("div", "flujo-cabecera");
+  cab.appendChild(el("h3", null, f.titulo));
+  cab.appendChild(el("span", "chip " + (f.momento === "hoy" ? "chip-hoy" : "chip-futuro"), f.momento === "hoy" ? "hoy" : "con la app"));
+  if (f.origen) cab.appendChild(el("span", "chip chip-neutro", "origen: " + f.origen));
+  bloc.appendChild(cab);
+  if (f.descripcion) bloc.appendChild(el("p", "descripcion", f.descripcion));
+  const lienzo = el("div", "lienzo");
+  lienzo.appendChild(el("div", "terminal", "inicio"));
+  pintarPasos(lienzo, f.pasos, false, f.id, []);
+  lienzo.appendChild(conector(false));
+  lienzo.appendChild(el("div", "terminal", "fin"));
+  bloc.appendChild(lienzo);
+  return bloc;
+}
+
+function tabFlujos(d) {
+  const s = el("section", "seccion");
+  s.appendChild(el("h2", null, "Cómo funciona el proceso"));
+  const hayFuturo = d.flujos.some(f => f.momento === "futuro");
+  s.appendChild(el("div", "nota", (hayFuturo
+    ? "Este es el proceso CON LA APP: lo que se va a construir. Debajo, plegada, queda la foto de cómo funciona hoy, por si quieres comparar el antes y el después. "
+    : "Este es el proceso tal y como funciona HOY, sin la app; cuando acordemos el reparto aparecerá aquí la versión con la app. ") +
+    "Cada bloque lleva su etiqueta: Persona (lo hace alguien de carne y hueso), Automático código (la app sola, con reglas fijas), Automático IA (la app usando inteligencia artificial) o Tercero externo (alguien de fuera, como el banco). Léelo de arriba abajo y busca mentiras: pasos que faltan, cosas que no pasan así."));
+  const ley = el("div", "leyenda");
+  [["m-humano", "Persona"], ["m-estatico", "Automático · código"],
+   ["m-ia", "Automático · IA"], ["m-externo", "Tercero externo"], ["m-decision", "⚑ Regla / ⚠ Excepción"], ["m-terminal", "inicio y fin"]]
+    .forEach(([c, t]) => { const sp = el("span"); sp.appendChild(el("i", c)); sp.appendChild(document.createTextNode(t)); ley.appendChild(sp); });
+  s.appendChild(ley);
+  if (Array.isArray(d.actores) && d.actores.length) {
+    const a = el("div", "actores");
+    a.appendChild(document.createTextNode("Quién es quién: "));
+    d.actores.forEach(x => a.appendChild(el("span", null, x.nombre)));
+    s.appendChild(a);
+  }
+  const futuros = d.flujos.filter(f => f.momento === "futuro");
+  const hoys = d.flujos.filter(f => f.momento === "hoy");
+  futuros.forEach(f => s.appendChild(pintarFlujo(f)));
+  if (hoys.length && futuros.length) {
+    const det = el("details", "flujo-hoy");
+    det.appendChild(el("summary", null, "Ver cómo funciona hoy, sin la app (el antes)"));
+    hoys.forEach(f => det.appendChild(pintarFlujo(f)));
+    s.appendChild(det);
+  } else {
+    hoys.forEach(f => s.appendChild(pintarFlujo(f)));
+  }
+  return s;
+}
+
+function tabRecorridos(d) {
+  const s = el("section", "seccion");
+  s.appendChild(el("h2", null, "Las entregas: qué se construye y cómo lo comprobaremos"));
+  s.appendChild(el("div", "nota", "La app no se construye entera de golpe: se construye por trozos que puedes probar de principio a fin, en este orden. El primero es la versión mínima que recorre todo el camino normal, aunque sea en fino. Cada trozo lleva sus promesas (qué hará la app: cuando pase tal cosa, la app hará tal otra) y sus pruebas (ejemplos con nombres y números reales para comprobar que la promesa se cumple)."));
+  d.recorridos.forEach((r, i) => {
+    const c = el("div", "tarjeta");
+    const cab = el("div", "tarjeta-cabecera");
+    if (r.id) cab.appendChild(el("span", "idtag", r.id));
+    cab.appendChild(el("span", "nombre", r.nombre));
+    if (i === 0) cab.appendChild(el("span", "chip chip-futuro", "1ª entrega"));
+    cab.appendChild(el("span", "chip " + (r.estado === "entregado" ? "chip-hecho" : "chip-neutro"), r.estado === "entregado" ? "entregado" : "pendiente"));
+    c.appendChild(cab);
+    if (r.objetivo) c.appendChild(el("div", "objetivo", r.objetivo));
+    const criteriosRecorrido = new Set((r.criterios || []).map(x => x.id));
+    const pruebasRecorrido = (d.pruebas_e2e || []).filter(prueba =>
+      (prueba.criterios || []).some(id => criteriosRecorrido.has(id))
+    );
+    pruebasRecorrido.forEach(prueba =>
+      cab.appendChild(el("span", "chip chip-spec", prueba.id + " · E2E"))
+    );
+    if (Array.isArray(r.requisitos) && r.requisitos.length) {
+      c.appendChild(el("div", "mini-titulo", "Qué hará la app (las promesas)"));
+      r.requisitos.forEach(q => {
+        const fila = el("div", "req");
+        fila.appendChild(el("span", "idtag", q.id));
+        fila.appendChild(el("span", null, q.texto));
+        if (q.origen) fila.appendChild(el("span", "chip chip-neutro", q.origen));
+        if (q.implementacion && q.implementacion.estado) {
+          fila.appendChild(el("span", "chip chip-spec", q.implementacion.estado));
+        }
+        c.appendChild(fila);
+      });
+    }
+    if (Array.isArray(r.criterios) && r.criterios.length) {
+      c.appendChild(el("div", "mini-titulo", "Cómo lo comprobaremos (las pruebas)"));
+      r.criterios.forEach(cr => {
+        const b = el("div", "criterio");
+        b.appendChild(el("span", "idtag", cr.id));
+        b.appendChild(document.createTextNode(" "));
+        [["Dado", cr.dado], ["Cuando", cr.cuando], ["Entonces", cr.entonces]].forEach(([et, tx], j) => {
+          if (j > 0) b.appendChild(document.createTextNode(" / "));
+          b.appendChild(el("b", null, et + " "));
+          b.appendChild(document.createTextNode(tx));
+        });
+        c.appendChild(b);
+      });
+    }
+    s.appendChild(c);
+  });
+  if (Array.isArray(d.pruebas_e2e) && d.pruebas_e2e.length) {
+    s.appendChild(el("div", "mini-titulo", "Pruebas E2E seleccionadas"));
+    d.pruebas_e2e.forEach(prueba => {
+      const fila = el("div", "req");
+      fila.appendChild(el("span", "idtag", prueba.id));
+      fila.appendChild(el("span", null,
+        "criterios " + (prueba.criterios || []).join(", ") +
+        " · personas " + (prueba.personas || []).join(", ") +
+        " · fronteras " + (prueba.fronteras || []).join(", ")));
+      s.appendChild(fila);
+    });
+  }
+  return s;
+}
+
+function tabReglas(d) {
+  const s = el("section", "seccion");
+  s.appendChild(el("h2", null, "Las reglas de tu negocio"));
+  s.appendChild(el("div", "nota", "Las normas que la app debe respetar siempre. Cuando una regla depende de varias cosas a la vez, va en tabla: cada fila es un caso y la última columna dice qué pasa."));
+  d.reglas.forEach(g => {
+    const c = el("div", "tarjeta");
+    const cab = el("div", "tarjeta-cabecera");
+    if (g.id) cab.appendChild(el("span", "idtag", g.id));
+    cab.appendChild(el("span", "nombre", g.nombre));
+    c.appendChild(cab);
+    if (g.texto) c.appendChild(el("div", "objetivo", g.texto));
+    if (g.tabla) c.appendChild(tabla(g.tabla.columnas, g.tabla.filas));
+    s.appendChild(c);
+  });
+  return s;
+}
+
+function tabEstados(d) {
+  const s = el("section", "seccion");
+  s.appendChild(el("h2", null, "Estados: en qué situación puede estar cada cosa"));
+  s.appendChild(el("div", "nota", "Un pedido puede estar sin confirmar, aprobado, enviado o anulado, y en cada situación se pueden hacer unas cosas y otras no. Esta tabla lo deja cerrado para que la app nunca permita algo que no toca."));
+  d.estados.forEach(e2 => {
+    const c = el("div", "tarjeta");
+    c.appendChild(el("div", "nombre", e2.entidad));
+    c.appendChild(tabla(["Estado", "Qué se puede hacer (quién, y a qué estado pasa)"], e2.estados.map(x => [x.nombre,
+      (x.acciones || []).map(a => typeof a === "string" ? a
+        : a.accion + (a.quien ? " (" + a.quien + ")" : "") + (a.pasa_a ? " → " + a.pasa_a : "")).join(" · ")])));
+    s.appendChild(c);
+  });
+  return s;
+}
+
+function tabDatos(d) {
+  const s = el("section", "seccion");
+  s.appendChild(el("h2", null, "Los datos: qué guarda la app y de dónde sale"));
+  s.appendChild(el("div", "nota", "Qué información apunta la app de cada cosa, de dónde viene la que ya existe (tu Excel, tu programa de facturación, tu gestor, tus papeles) y con qué otros programas o servicios tiene que hablar (el banco, el ERP, WhatsApp, la web de un proveedor)."));
+  if (Array.isArray(d.datos) && d.datos.length) {
+    s.appendChild(el("div", "mini-titulo", "Qué se guarda"));
+    s.appendChild(tabla(["Cosa", "Qué se guarda", "De dónde viene"], d.datos.map(x => [x.cosa, (x.guarda || []).join(", "), x.origen || ""])));
+  }
+  if (Array.isArray(d.volumen) && d.volumen.length) {
+    s.appendChild(el("div", "mini-titulo", "Números del negocio"));
+    s.appendChild(tabla(["Qué", "Cuánto"], d.volumen.map(x => [x.que, x.cuanto])));
+  }
+  if (Array.isArray(d.integraciones) && d.integraciones.length) {
+    s.appendChild(el("div", "mini-titulo", "Con qué habla"));
+    const ul = el("ul", "lista");
+    d.integraciones.forEach(x => ul.appendChild(el("li", null, x.con + (x.para ? ": " + x.para : ""))));
+    s.appendChild(ul);
+  }
+  return s;
+}
+
+function tabSuperficie(d) {
+  const sup = d.superficie;
+  const permisos = sup.permisos || {};
+  const s = el("section", "seccion");
+  s.appendChild(el("h2", null, "Por dónde se usa la app"));
+  s.appendChild(el("div", "nota", "Cada puerta de entrada a la app (un panel, un WhatsApp, un correo): quién entra por ella, qué ve, qué puede hacer y qué no debe poder hacer JAMÁS. Más abajo: quién puede hacer qué (la tabla de permisos), quién recibe avisos y por dónde, y las condiciones del día a día."));
+  (sup.puntos || []).forEach(p => {
+    const c = el("div", "tarjeta");
+    c.appendChild(el("div", "nombre", p.nombre));
+    c.appendChild(tabla(["", ""], [
+      ["Quién entra", (p.quien || []).join(", ")],
+      ["Por dónde llega", p.llega || ""],
+      ["Cuándo lo usa", p.cuando || ""],
+      ["Qué ve nada más entrar", p.ve || ""],
+      ["Qué puede hacer", (p.puede || []).join(" · ")],
+      ["Qué NO debe poder jamás", (p.nunca || []).map(textoNunca).join(" · ")]
+    ]));
+    s.appendChild(c);
+  });
+  if (Array.isArray(permisos.acciones) && permisos.acciones.length) {
+    s.appendChild(el("div", "mini-titulo", "Quién puede hacer qué"));
+    s.appendChild(tabla([""].concat(permisos.acciones),
+      (permisos.roles || []).map(r => [r.rol].concat(permisos.acciones.map(a => (r.permitidas || []).includes(a) ? "✓" : "")))
+        .concat((permisos.grupos || []).map(g => ["grupo: " + g.grupo].concat(
+          permisos.acciones.map(a => (g.permitidas || []).includes(a) ? "✓" : "")
+        )))));
+  }
+  if (Array.isArray(permisos.restricciones) && permisos.restricciones.length) {
+    s.appendChild(el("div", "mini-titulo", "Restricciones de permisos"));
+    s.appendChild(tabla(
+      ["ID", "Sujeto", "Acción", "Recurso", "Alcance / condición", "Prueba"],
+      permisos.restricciones.map(r => [
+        r.id, r.rol ? "rol: " + r.rol : "grupo: " + r.grupo, r.accion, r.recurso,
+        [r.alcance, r.condicion].filter(Boolean).join(" · "),
+        [r.requisito, r.criterio].filter(Boolean).join(" · ")
+      ])
+    ));
+  }
+  if (Array.isArray(sup.avisos) && sup.avisos.length) {
+    s.appendChild(el("div", "mini-titulo", "Avisos"));
+    s.appendChild(tabla(["Quién se entera", "De qué", "Por dónde", "Cuándo"],
+      sup.avisos.map(a => [a.quien, a.que, a.canal || "", a.cuando || ""])));
+  }
+  if (Array.isArray(sup.condiciones) && sup.condiciones.length) {
+    s.appendChild(el("div", "mini-titulo", "Condiciones del día a día"));
+    const ul = el("ul", "lista");
+    sup.condiciones.forEach(x => ul.appendChild(el("li", null, x)));
+    s.appendChild(ul);
+  }
+  return s;
+}
+
+function recogerAcciones(pasos, fn) {
+  pasos.forEach(p => {
+    if (p.tipo === "decision") {
+      const rs = Array.isArray(p.ramas) ? p.ramas : (p.rama ? [p.rama] : []);
+      rs.forEach(r => recogerAcciones(r.pasos, fn));
+    } else fn(p);
+  });
+}
+
+function tabActores(d) {
+  const s = el("section", "seccion");
+  s.appendChild(el("h2", null, "Por actor"));
+  s.appendChild(el("div", "nota", "El proyecto visto desde cada persona: qué hace, por dónde toca la aplicación, qué puede y qué no, y de qué se entera."));
+  const sup = d.superficie || {};
+  d.actores.forEach(a => {
+    const clave = a.nombre.toLowerCase();
+    const c = el("div", "tarjeta");
+    const cab = el("div", "tarjeta-cabecera");
+    cab.appendChild(el("span", "nombre", a.nombre));
+    if (a.rol) cab.appendChild(el("span", "chip chip-neutro", a.rol));
+    if (a.organizacion) cab.appendChild(el("span", "chip chip-neutro", a.organizacion));
+    (a.grupos || []).forEach(grupo =>
+      cab.appendChild(el("span", "chip chip-neutro", grupo))
+    );
+    if (a.estado) cab.appendChild(el("span", "chip chip-spec", a.estado));
+    c.appendChild(cab);
+
+    const tareas = [];
+    (d.flujos || []).forEach(f => recogerAcciones(f.pasos, p => {
+      if ((p.quien || "").toLowerCase() === clave) tareas.push([p.texto, f.momento]);
+    }));
+    if (tareas.length) {
+      c.appendChild(el("div", "mini-titulo", "Qué hace en los flujos"));
+      tareas.forEach(([t, m]) => {
+        const fila = el("div", "req");
+        fila.appendChild(el("span", "chip " + (m === "hoy" ? "chip-hoy" : "chip-futuro"), m === "hoy" ? "hoy" : "con la app"));
+        fila.appendChild(el("span", null, t));
+        c.appendChild(fila);
+      });
+    }
+
+    const puntos = (sup.puntos || []).filter(p => (p.quien || []).some(q => q.toLowerCase() === clave));
+    if (puntos.length) {
+      c.appendChild(el("div", "mini-titulo", "Por dónde toca la app"));
+      puntos.forEach(p => {
+        const fila = el("div", "req");
+        fila.appendChild(el("span", null, p.nombre + (p.llega ? " (" + p.llega + ")" : "")));
+        c.appendChild(fila);
+      });
+    }
+
+    const filasRoles = ((sup.permisos || {}).roles || []);
+    const claveRol = (a.rol || "").toLowerCase();
+    const claveLegacy = (a.nombre || "").toLowerCase();
+    const rol = filasRoles.find(r => r.rol.toLowerCase() === claveRol) ||
+      filasRoles.find(r => r.rol.toLowerCase() === claveLegacy);
+    const gruposActor = new Set((a.grupos || []).map(g => g.toLowerCase()));
+    const permisosEfectivos = new Set((rol || {}).permitidas || []);
+    ((sup.permisos || {}).grupos || [])
+      .filter(g => gruposActor.has((g.grupo || "").toLowerCase()))
+      .forEach(g => (g.permitidas || []).forEach(accion => permisosEfectivos.add(accion)));
+    if (rol || permisosEfectivos.size) {
+      c.appendChild(el("div", "mini-titulo", "Qué puede hacer"));
+      c.appendChild(el("div", "objetivo", Array.from(permisosEfectivos).join(" · ") || "nada"));
+    }
+    const nunca = puntos.reduce((acc, p) => acc.concat(p.nunca || []), []);
+    if (nunca.length) {
+      c.appendChild(el("div", "mini-titulo", "Qué NO debe poder jamás"));
+      c.appendChild(el("div", "objetivo", nunca.map(textoNunca).join(" · ")));
+    }
+    const restricciones = ((sup.permisos || {}).restricciones || []).filter(
+      r => (r.rol || "").toLowerCase() === claveRol ||
+        (a.grupos || []).some(g => g.toLowerCase() === (r.grupo || "").toLowerCase())
+    );
+    if (restricciones.length) {
+      c.appendChild(el("div", "mini-titulo", "Restricciones aplicables"));
+      restricciones.forEach(r => {
+        const fila = el("div", "req");
+        fila.appendChild(el("span", "idtag", r.id));
+        fila.appendChild(el("span", null,
+          r.accion + " sobre " + r.recurso +
+          ([r.alcance, r.condicion].filter(Boolean).length
+            ? " · " + [r.alcance, r.condicion].filter(Boolean).join(" · ") : "")));
+        c.appendChild(fila);
+      });
+    }
+    const avisos = (sup.avisos || []).filter(x => (x.quien || "").toLowerCase() === clave);
+    if (avisos.length) {
+      c.appendChild(el("div", "mini-titulo", "Avisos que recibe"));
+      avisos.forEach(x => {
+        const fila = el("div", "req");
+        fila.appendChild(el("span", null, x.que + (x.canal ? " · por " + x.canal : "") + (x.cuando ? " · " + x.cuando : "")));
+        c.appendChild(fila);
+      });
+    }
+    s.appendChild(c);
+  });
+  return s;
+}
+
+function tabDocumentos() {
+  const s = el("section", "seccion");
+  s.appendChild(el("h2", null, "Para el programador"));
+  s.appendChild(el("div", "nota", "Estos dos documentos acompañan el relevo a la IA que construya o revise tu aplicación. spec.md se regenera desde los planos; encargo.md lo prepara el agente con las instrucciones concretas. No hace falta que los leas enteros, pero son tuyos."));
+  if (docEncargo) {
+    s.appendChild(el("div", "mini-titulo", "encargo.md"));
+    s.appendChild(el("pre", "doc", docEncargo));
+  }
+  if (docSpec) {
+    s.appendChild(el("div", "mini-titulo", "spec.md"));
+    s.appendChild(el("pre", "doc", docSpec));
+  }
+  return s;
+}
+
+function tabCalidad(d) {
+  const s = el("section", "seccion");
+  s.appendChild(el("h2", null, "Compromisos de funcionamiento"));
+  s.appendChild(el("div", "nota", "Promesas medibles sobre velocidad, aguante y seguridad: cuánto puede tardar algo, qué pasa si se corta internet, quién no debe ver según qué datos. Se pueden comprobar con un reloj o con una prueba, no son buenas intenciones."));
+  d.calidad.forEach(q => {
+    const fila = el("div", "req");
+    fila.appendChild(el("span", "idtag", q.id));
+    fila.appendChild(el("span", null, q.criterio));
+    s.appendChild(fila);
+  });
+  return s;
+}
+
+function tabFuera(d) {
+  const s = el("section", "seccion");
+  s.appendChild(el("h2", null, "Lo que esta app NO hará"));
+  s.appendChild(el("div", "nota", "Decidido a propósito, para que nadie lo espere ni nadie lo construya por su cuenta. Decir que no a algo también es una decisión de negocio."));
+  const ul = el("ul", "lista");
+  d.fuera.forEach(x => ul.appendChild(el("li", null, x)));
+  s.appendChild(ul);
+  return s;
+}
+
+function tabPreguntas(d) {
+  const s = el("section", "seccion");
+  s.appendChild(el("h2", null, "Cosas sin decidir todavía"));
+  s.appendChild(el("div", "nota", "Lo que quedó pendiente de decidir. Nada de esta lista se construye hasta que tú lo decidas: el programador tiene prohibido inventarse las respuestas."));
+  const c = el("div", "tarjeta aviso-preguntas");
+  const ul = el("ul", "lista");
+  d.preguntas.forEach(x => ul.appendChild(el("li", null, x)));
+  c.appendChild(ul);
+  s.appendChild(c);
+  return s;
+}
+
+function tabHistorial() {
+  const s = el("section", "seccion");
+  s.appendChild(el("h2", null, "Historial de decisiones"));
+  s.appendChild(el(
+    "div", "nota",
+    "Cada aprobación conserva quién aprobó, cuándo y la huella exacta de los planos. La comparación señala los bloques cambiados después."
+  ));
+  if (!historialActual.length) {
+    s.appendChild(el("div", "tarjeta",
+      "Todavía no se ha aprobado ninguna versión."));
+    return s;
+  }
+  historialActual.slice().reverse().forEach(entrada => {
+    const c = el("div", "tarjeta");
+    const cab = el("div", "tarjeta-cabecera");
+    cab.appendChild(el("span", "nombre", "Versión " + entrada.version));
+    cab.appendChild(el("span", "chip chip-hecho", "aprobada"));
+    c.appendChild(cab);
+    c.appendChild(el(
+      "div", "objetivo",
+      "Por " + (entrada.por || "sin identificar") + " · " +
+      (entrada.fecha || "sin fecha") + " · huella " +
+      (entrada.huella || "").slice(0, 12)
+    ));
+    s.appendChild(c);
+  });
+  if (!comparacionActual.hay_aprobacion ||
+      comparacionActual.identico) {
+    s.appendChild(el("div", "tarjeta",
+      "Sin cambios posteriores a la última aprobación."));
+    return s;
+  }
+  const cambios = el("div", "tarjeta aviso-preguntas");
+  cambios.appendChild(el("div", "nombre", "Cambios posteriores"));
+  const lista = el("ul", "lista");
+  Object.entries(comparacionActual.planos || {}).forEach(([plano, diff]) => {
+    ["anadidos", "eliminados", "cambiados"].forEach(tipo => {
+      (diff[tipo] || []).forEach(bloque =>
+        lista.appendChild(el(
+          "li", null,
+          plano + " · " + tipo + ": " + bloque
+        ))
+      );
+    });
+  });
+  cambios.appendChild(lista);
+  s.appendChild(cambios);
+  return s;
+}
+
+/* ---------- montaje ---------- */
+
+function activar(id) {
+  pestanaActiva = id;
+  history.replaceState(null, "", "#" + (seleccion === "mapa" ? "" : seleccion + "::") + id);
+  document.querySelectorAll("nav.pestanas button").forEach(b => b.classList.toggle("activa", b.dataset.id === id));
+  document.querySelectorAll("main .seccion").forEach(sec => sec.classList.toggle("activa", sec.id === "s-" + id));
+}
+
+function seleccionar(id) {
+  if (seleccion === id) return;
+  seleccion = id;
+  pestanaActiva = "resumen";
+  ultimaFoto = "";
+  cargar();
+}
+
+function seleccionarFlujo(id) {
+  pestanaActiva = "flujos";
+  activar("flujos");
+  document.querySelectorAll("#menuIzq button").forEach(
+    b => b.classList.toggle("activo", b.dataset.flujo === id)
+  );
+  const destino = document.getElementById("flujo-" + id);
+  if (!destino) return;
+  const plegado = destino.closest("details");
+  if (plegado) plegado.open = true;
+  requestAnimationFrame(() => {
+    document.querySelectorAll(".flujo.fila-resaltada").forEach(
+      x => x.classList.remove("fila-resaltada")
+    );
+    destino.classList.add("fila-resaltada");
+    destino.scrollIntoView({ behavior: "smooth", block: "start" });
+    destino.focus({ preventScroll: true });
+  });
+}
+
+function aplicarFiltrosMenu() {
+  const entradas = document.getElementById("menuEntradas");
+  const consulta = document.getElementById("buscarFlujos").value
+    .trim().toLocaleLowerCase("es");
+  const filtro = document.getElementById("filtroFlujos").value
+    .toLocaleLowerCase("es");
+  entradas.querySelectorAll("button").forEach(b => {
+    const coincideTexto = !consulta ||
+      (b.dataset.busqueda || b.textContent).toLocaleLowerCase("es")
+        .includes(consulta);
+    const coincideFiltro = !filtro ||
+      (b.dataset.filtros || "").toLocaleLowerCase("es").includes(filtro);
+    b.hidden = !(coincideTexto && coincideFiltro);
+  });
+  entradas.querySelectorAll(".grupo").forEach(grupo => {
+    let siguiente = grupo.nextElementSibling;
+    let visible = false;
+    while (siguiente && !siguiente.classList.contains("grupo")) {
+      if (siguiente.tagName === "BUTTON" && !siguiente.hidden) visible = true;
+      siguiente = siguiente.nextElementSibling;
+    }
+    grupo.hidden = !visible;
+  });
+  const visibles = Array.from(entradas.querySelectorAll("button"))
+    .filter(b => !b.hidden);
+  let vacio = entradas.querySelector(".menu-sin-resultados");
+  if (!vacio) {
+    vacio = el("div", "menu-vacio menu-sin-resultados",
+      "No hay flujos que coincidan.");
+    entradas.appendChild(vacio);
+  }
+  vacio.hidden = visibles.length > 0;
+}
+
+function pintarMenu(dRoot) {
+  const menu = document.getElementById("menuIzq");
+  const entradas = document.getElementById("menuEntradas");
+  entradas.textContent = "";
+  const actividades = Array.isArray(dRoot.actividades) ? dRoot.actividades : [];
+  const flujos = Array.isArray(dRoot.flujos) ? dRoot.flujos : [];
+  if (actividades.length) {
+    const bMapa = el("button", seleccion === "mapa" ? "activo" : null, "🗺 El mapa");
+    bMapa.dataset.busqueda = "mapa actividades";
+    bMapa.dataset.filtros = "";
+    bMapa.addEventListener("click", () => seleccionar("mapa"));
+    entradas.appendChild(bMapa);
+    const areas = [];
+    actividades.forEach(a => { if (!areas.includes(a.area)) areas.push(a.area); });
+    areas.forEach(area => {
+      entradas.appendChild(el("div", "grupo", area));
+      actividades.filter(a => a.area === area).forEach(a => {
+        const b = el("button", seleccion === a.id ? "activo" : null);
+        b.appendChild(el("span", "pm " + (PM_ESTADO[a.estado] || "pm-sin")));
+        b.appendChild(document.createTextNode(a.nombre));
+        b.dataset.busqueda = [a.nombre, a.area, a.resumen || ""].join(" ");
+        b.dataset.filtros = [
+          a.estado || "",
+          a.origen || "",
+          (a.cobertura || {}).estado || ""
+        ].join(" ");
+        b.title = a.estado || "sin empezar";
+        b.addEventListener("click", () => seleccionar(a.id));
+        entradas.appendChild(b);
+      });
+    });
+  } else if (flujos.length) {
+    flujos.forEach(f => {
+      const b = el("button", null, f.titulo);
+      b.dataset.flujo = f.id;
+      b.dataset.busqueda = [f.titulo, f.descripcion || ""].join(" ");
+      b.dataset.filtros = [f.momento || "", f.origen || ""].join(" ");
+      b.title = f.momento === "hoy" ? "Flujo de hoy" : "Flujo futuro";
+      b.addEventListener("click", () => seleccionarFlujo(f.id));
+      entradas.appendChild(b);
+    });
+  } else {
+    entradas.appendChild(el("div", "menu-vacio", "Aún no hay flujos definidos."));
+  }
+  aplicarFiltrosMenu();
+  menu.hidden = false;
+  document.body.classList.add("con-menu");
+}
+
+function pintarVacia(dRoot, id) {
+  const act = (dRoot.actividades || []).find(a => a.id === id);
+  document.title = (act ? act.nombre : id) + " · planos";
+  document.getElementById("titulo").textContent = act ? act.nombre : id;
+  document.getElementById("proyecto").textContent = "Actividad de: " + dRoot.titulo + (act && act.estado ? " · " + act.estado : "");
+  const cont = document.getElementById("contenido");
+  const nav = document.getElementById("pestanas");
+  nav.textContent = "";
+  nav.hidden = true;
+  cont.textContent = "";
+  const sec = el("section", "seccion activa");
+  sec.appendChild(el("h2", null, "Esta actividad aún no tiene planos"));
+  sec.appendChild(el("div", "nota", (act && act.resumen ? act.resumen + ". " : "") +
+    'Pídele a tu IA que la abra ("quiero empezar con ' + (act ? act.nombre : id) + '") y esta página se rellenará sola.'));
+  cont.appendChild(sec);
+}
+
+function pintar(d) {
+  document.title = d.titulo + " · planos";
+  document.getElementById("titulo").textContent = d.titulo;
+  document.getElementById("proyecto").textContent = d.proyecto ? "Proyecto: " + d.proyecto : "";
+
+  const defs = [
+    ["mapa", "El mapa", Array.isArray(d.actividades) && d.actividades.length > 0, tabMapa],
+    ["flujos", "El proceso", Array.isArray(d.flujos) && d.flujos.length > 0, tabFlujos],
+    ["actores", "Por persona", Array.isArray(d.actores) && d.actores.length > 0 && ((Array.isArray(d.flujos) && d.flujos.length > 0) || !!d.superficie), tabActores],
+    ["recorridos", "Las entregas", Array.isArray(d.recorridos) && d.recorridos.length > 0, tabRecorridos],
+    ["reglas", "Las reglas", Array.isArray(d.reglas) && d.reglas.length > 0, tabReglas],
+    ["episodios", "Casos reales", Array.isArray(d.episodios) && d.episodios.length > 0, tabEpisodios],
+    ["estados", "Estados", Array.isArray(d.estados) && d.estados.length > 0, tabEstados],
+    ["datos", "Los datos", (Array.isArray(d.datos) && d.datos.length > 0) || (Array.isArray(d.integraciones) && d.integraciones.length > 0) || (Array.isArray(d.volumen) && d.volumen.length > 0), tabDatos],
+    ["superficie", "Por dónde se usa", !!(d.superficie && ((d.superficie.puntos || []).length || d.superficie.permisos || (d.superficie.avisos || []).length || (d.superficie.condiciones || []).length)), tabSuperficie],
+    ["calidad", "Compromisos", Array.isArray(d.calidad) && d.calidad.length > 0, tabCalidad],
+    ["fuera", "Lo que NO hará", Array.isArray(d.fuera) && d.fuera.length > 0, tabFuera],
+    ["preguntas", "Sin decidir", Array.isArray(d.preguntas) && d.preguntas.length > 0, tabPreguntas],
+    ["documentos", "Para el programador", !!(docSpec || docEncargo), tabDocumentos],
+    ["historial", "Historial", true, tabHistorial]
+  ];
+
+  const cont = document.getElementById("contenido");
+  const nav = document.getElementById("pestanas");
+  cont.textContent = "";
+  nav.textContent = "";
+
+  const nHoy = (d.flujos || []).filter(f => f.momento === "hoy").length;
+  const nFut = (d.flujos || []).length - nHoy;
+  const nReq = (d.recorridos || []).reduce((a, r) => a + (r.requisitos || []).length, 0);
+  const nCri = (d.recorridos || []).reduce((a, r) => a + (r.criterios || []).length, 0);
+  const cuentas = {
+    mapa: (d.actividades || []).length
+      ? (d.actividades || []).length + " actividades especificadas"
+      : "",
+    flujos: (d.flujos || []).length ? nHoy + " de hoy, " + nFut + " con la app" : "",
+    recorridos: (d.recorridos || []).length ? (d.recorridos || []).length + " entregas, " + nReq + " requisitos, " + nCri + " criterios" : "",
+    reglas: (d.reglas || []).map(x => x.id).join(", "),
+    episodios: (d.episodios || []).length ? (d.episodios || []).length + " hechos reales" : "",
+    estados: (d.estados || []).map(x => x.entidad).join(", "),
+    datos: (d.datos || []).map(x => x.cosa).join(", "),
+    superficie: ((d.superficie || {}).puntos || []).map(x => x.nombre).join(", "),
+    calidad: (d.calidad || []).length ? (d.calidad || []).length + " criterios comprobables" : "",
+    fuera: (d.fuera || []).length ? (d.fuera || []).length + " decisiones" : "",
+    preguntas: (d.preguntas || []).length + " sin decidir"
+  };
+  const noAplican = new Set(((d.definicion || {}).bloques_no_aplican || []));
+  const bloquePorId = {
+    mapa: "actividades", flujos: "flujos", actores: "actores",
+    recorridos: "recorridos", reglas: "reglas", episodios: "episodios",
+    estados: "estados", datos: "datos", superficie: "superficie",
+    calidad: "calidad", fuera: "fuera", preguntas: "preguntas"
+  };
+  const esMapa = Array.isArray(d.actividades) && d.actividades.length > 0;
+  const soloActividad = new Set(["flujos", "recorridos", "reglas", "episodios", "estados", "superficie"]);
+  const progreso = defs
+    .filter(([id]) => !(esMapa && soloActividad.has(id)))
+    .filter(([id]) => id !== "documentos" && id !== "historial")
+    .map(([id, titulo, presente]) => [
+      titulo,
+      noAplican.has(bloquePorId[id])
+        ? "no-aplica"
+        : (id === "preguntas" ? true : !!presente),
+      cuentas[id] || ""
+    ]);
+  const pestañas = [["resumen", "Resumen", true, dd => tabResumen(dd, progreso)]].concat(defs.filter(x => x[2]));
+
+  pestañas.forEach(([id, titulo, presente, render]) => {
+    const sec = render(d);
+    sec.id = "s-" + id;
+    cont.appendChild(sec);
+    const b = el("button", null, titulo);
+    b.dataset.id = id;
+    b.addEventListener("click", () => activar(id));
+    nav.appendChild(b);
+  });
+  nav.hidden = false;
+
+  const ids = pestañas.map(x => x[0]);
+  activar(ids.includes(pestanaActiva) ? pestanaActiva : "resumen");
+}
+
+async function txtOpcional(ruta) {
+  try {
+    const r = await fetch(ruta, { cache: "no-store" });
+    return r.ok ? await r.text() : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function cargar() {
+  if (cargando) return;
+  cargando = true;
+  try {
+    let textoRoot;
+    try {
+      const r = await fetch("datos.json", { cache: "no-store" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      textoRoot = await r.text();
+    } catch (e) {
+      // El servidor no responde: avisa, pero conserva lo pintado.
+      if (ultimaFoto) document.getElementById("banner").classList.add("visible");
+      else fallo("no hay conexión con el servidor local (" + e.message + ").");
+      return;
+    }
+    document.getElementById("banner").classList.remove("visible");
+
+    let dRoot;
+    try {
+      dRoot = JSON.parse(textoRoot);
+      validarTodo(dRoot);
+    } catch (e) {
+      // Datos a medio escribir o inválidos: NO se toca el render bueno.
+      if (ultimaFoto) document.getElementById("bannerDatos").classList.add("visible");
+      else fallo(e.message);
+      return;
+    }
+
+    const esMapa = Array.isArray(dRoot.actividades) && dRoot.actividades.length > 0;
+    if (!esMapa) seleccion = "mapa";
+    const base = (esMapa && seleccion !== "mapa") ? "actividades/" + seleccion + "/" : "";
+
+    let textoAct = null;
+    let dSel = dRoot;
+    if (base) {
+      textoAct = await txtOpcional(base + "datos.json");
+      if (textoAct === null) {
+        dSel = null; // la actividad aún no tiene planos
+      } else {
+        try {
+          dSel = JSON.parse(textoAct);
+          validarTodo(dSel);
+        } catch (e) {
+          if (ultimaFoto) { document.getElementById("bannerDatos").classList.add("visible"); return; }
+          fallo(e.message);
+          return;
+        }
+      }
+    }
+    const spec = await txtOpcional(base + "spec.md");
+    const encargo = await txtOpcional(base + "encargo.md");
+    const [historial, comparacion] =
+      await Promise.all([
+        apiJSON("historial.json").catch(() => []),
+        apiJSON("comparacion.json").catch(() => ({
+          hay_aprobacion: false, identico: false, planos: {}
+        }))
+      ]);
+
+    const foto = JSON.stringify([
+      seleccion, textoRoot, textoAct, spec, encargo,
+      historial, comparacion
+    ]);
+    if (foto === ultimaFoto) return;
+
+    document.getElementById("error").hidden = true;
+    document.getElementById("bannerDatos").classList.remove("visible");
+    historialActual = historial;
+    comparacionActual = comparacion;
+    pintarMenu(dRoot);
+    docSpec = spec;
+    docEncargo = encargo;
+    if (dSel) pintar(dSel);
+    else pintarVacia(dRoot, seleccion);
+    ultimaFoto = foto; // solo tras un render completo con éxito
+  } finally {
+    cargando = false;
+  }
+}
+
+const hash0 = decodeURIComponent((location.hash || "").replace("#", ""));
+if (hash0.includes("::")) {
+  seleccion = hash0.split("::")[0] || "mapa";
+  pestanaActiva = hash0.split("::")[1] || "resumen";
+} else if (hash0) {
+  pestanaActiva = hash0;
+}
+document.getElementById("buscarFlujos").addEventListener(
+  "input", aplicarFiltrosMenu
+);
+document.getElementById("filtroFlujos").addEventListener(
+  "change", aplicarFiltrosMenu
+);
+cargar();
+setInterval(cargar, 3000);
+</script>
+</body>
+</html>

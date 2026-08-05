@@ -1,0 +1,330 @@
+#!/usr/bin/env python3
+"""Hook de git AGNÓSTICO al agente (lo ejecuta git, no el agente): bloquea el push de
+ramas de unidad (NNN-slug) cuya especificación no exista o sea de plantilla.
+
+Funciona con Claude, Codex, OpenCode, Antigravity o a mano: git es el mismo para todos.
+Es la red del atajo; la capa fuerte sigue siendo scripts/unidad.py. Ante la duda, pasa.
+"""
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+# Windows: git captura la salida del hook, así que el encoding es el local (cp1252) y un
+# carácter fuera de él convertiría un mensaje de bloqueo en un UnicodeEncodeError.
+for _salida in (sys.stdout, sys.stderr):
+    if hasattr(_salida, "reconfigure"):
+        _salida.reconfigure(encoding="utf-8", errors="replace")
+
+WORKSPACE = Path(__file__).resolve().parents[1]
+UNIDAD = re.compile(r"^\d{3}-[a-z0-9][a-z0-9-]*$")
+EXPRES = re.compile(r"^expres-(P-\d{8}-[a-f0-9]{8})-([a-z0-9][a-z0-9-]*)$")
+# Se descuenta lo que NO es contrato escrito por una persona: cabeceras, frontmatter, citas
+# `>` (las instrucciones de la plantilla), viñetas `R*` vacías y huecos `<...>` sin rellenar.
+NO_PROSA = re.compile(r"^\s*(#{1,6}\s|>|---\s*$|\w+:\s|[-*]\s*\*\*R\d)|<[^>]+>")
+MIN_PROSA = 200
+
+
+def legacy():
+    ruta = WORKSPACE / "docs/05-trabajo/peticiones/LEGACY.json"
+    if not ruta.exists():
+        return {"modo": "estricto", "ramas": [], "unidades": []}
+    try:
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"modo": "estricto", "ramas": [], "unidades": []}
+    return datos
+
+
+LEGACY = legacy()
+
+
+def rama_principal():
+    ruta = WORKSPACE / "repos.yaml"
+    if ruta.exists():
+        encontrada = re.search(
+            r"^\s*rama_principal:\s*(\S+)", ruta.read_text(encoding="utf-8"), re.M
+        )
+        if encontrada:
+            return encontrada.group(1)
+    return "main"
+
+
+def spec_de(unidad):
+    candidatos = (
+        WORKSPACE / "docs/05-trabajo" / unidad / "especificacion.md",
+        WORKSPACE / "docs/05-trabajo/archivo" / unidad / "especificacion.md",
+        WORKSPACE / "docs/bugs" / f"{unidad}.md",
+    )
+    return next((ruta for ruta in candidatos if ruta.exists()), None)
+
+
+def referencias_de_unidad(unidad):
+    spec = spec_de(unidad)
+    if spec is None:
+        return []
+    encontrada = re.search(r"^peticiones:\s*\[(.*?)\]", spec.read_text(encoding="utf-8"), re.M)
+    if not encontrada:
+        return []
+    return [item.strip() for item in encontrada.group(1).split(",") if item.strip()]
+
+
+def bloquear_o_avisar(mensaje):
+    if LEGACY.get("modo", "estricto") == "observacion":
+        sys.stderr.write(f"\nAVISO DE TRAZABILIDAD: {mensaje}\n")
+        return False
+    sys.stderr.write(f"\nPUSH BLOQUEADO: {mensaje}\n")
+    return True
+
+
+def ramas_locales():
+    repo = WORKSPACE / "main"
+    try:
+        resultado = subprocess.run(
+            [
+                "git", "-C", str(repo), "for-each-ref",
+                "--format=%(refname:short)", "refs/heads",
+            ],
+            text=True,
+            capture_output=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
+    except OSError:
+        return []
+    if resultado.returncode:
+        return []
+    return [linea.strip() for linea in resultado.stdout.splitlines() if linea.strip()]
+
+
+def git_repo(*args):
+    return subprocess.run(
+        ["git", "-C", str(WORKSPACE / "main"), *args],
+        text=True,
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        check=False,
+    )
+
+
+def proceso_peticion(pid, rama, tipo):
+    ruta = WORKSPACE / "docs/05-trabajo/peticiones" / pid / "peticion.json"
+    try:
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return next(
+        (
+            proceso for proceso in datos.get("procesos", [])
+            if proceso.get("tipo") == tipo and proceso.get("ref") == rama
+            and proceso.get("revision") == datos.get("revision")
+            and proceso.get("estado") == "pendiente"
+        ),
+        None,
+    )
+
+
+def rama_con_trabajo_fusionado(rama, sha_principal, proceso):
+    metadata = (proceso or {}).get("metadata") or {}
+    base = metadata.get("base_sha", "")
+    if not base:
+        return False
+    punta = git_repo("rev-parse", "--verify", "--quiet", f"{rama}^{{commit}}")
+    punta = punta.stdout.strip() if punta.returncode == 0 else ""
+    if not punta or punta == base:
+        return False
+    if git_repo("merge-base", "--is-ancestor", base, punta).returncode != 0:
+        return False
+    if git_repo("merge-base", "--is-ancestor", punta, sha_principal).returncode == 0:
+        return True
+    huella_squash = git_repo(
+        "log", sha_principal, f"^{base}", "--fixed-strings", f"--grep={rama}",
+        "--format=%H", "-1",
+    )
+    return huella_squash.returncode == 0 and bool(huella_squash.stdout.strip())
+
+
+def push_principal_trazado(sha):
+    for rama in ramas_locales():
+        if UNIDAD.fullmatch(rama):
+            referencias = referencias_de_unidad(rama)
+            procesos = [
+                proceso_unidad(referencia, rama) for referencia in referencias
+            ]
+            if referencias and all(procesos) and all(
+                rama_con_trabajo_fusionado(rama, sha, proceso) for proceso in procesos
+            ) and prosa(rama) >= MIN_PROSA:
+                return True
+        expres = EXPRES.fullmatch(rama)
+        if expres:
+            proceso = proceso_peticion(expres.group(1), rama, "expres")
+            if peticion_expres_valida(expres.group(1), rama) and rama_con_trabajo_fusionado(
+                rama, sha, proceso
+            ):
+                return True
+    return False
+
+
+def proceso_unidad(referencia, unidad):
+    encontrada = re.fullmatch(r"(P-\d{8}-[a-f0-9]{8})@(\d+)", referencia)
+    if not encontrada:
+        return None
+    pid, revision = encontrada.groups()
+    ruta = WORKSPACE / "docs/05-trabajo/peticiones" / pid / "peticion.json"
+    try:
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if datos.get("estado") in {"cerrada", "cancelada"}:
+        return None
+    if datos.get("revision") != int(revision):
+        return None
+    tipo = "bug" if (WORKSPACE / "docs/bugs" / f"{unidad}.md").is_file() else "unidad"
+    return next(
+        (
+            proceso for proceso in datos.get("procesos", [])
+            if proceso.get("tipo") == tipo
+            and proceso.get("ref") == unidad
+            and proceso.get("revision") == int(revision)
+            and proceso.get("estado") == "pendiente"
+        ),
+        None,
+    )
+
+
+def peticion_expres_valida(pid, rama):
+    ruta = WORKSPACE / "docs/05-trabajo/peticiones" / pid / "peticion.json"
+    try:
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    evaluaciones = [
+        item
+        for item in datos.get("evaluaciones", [])
+        if item.get("revision") == datos.get("revision")
+    ]
+    if not evaluaciones or evaluaciones[-1].get("investigacion", {}).get("perfil") != "ninguna":
+        return False
+    if datos.get("estado") in {"cerrada", "cancelada"}:
+        return False
+    return any(
+        proceso.get("tipo") == "expres" and proceso.get("ref") == rama
+        and proceso.get("revision") == datos.get("revision")
+        and proceso.get("estado") == "pendiente"
+        for proceso in datos.get("procesos", [])
+    )
+
+
+def peticion_unidad_valida(referencia, unidad):
+    return proceso_unidad(referencia, unidad) is not None
+
+
+def lineas_de_plantilla(nombre_plantilla, unidad):
+    """Las líneas literales de la plantilla, con el nombre de esta unidad ya sustituido.
+
+    Sin esto el hook no bloqueaba NADA: una plantilla recién copiada trae miles de caracteres
+    de prosa fija (reglas del constructor, definición de hecho) y pasaba el umbral por veinte
+    veces sin que nadie hubiera escrito una línea de contrato.
+    """
+    ruta = WORKSPACE / "docs" / "00-metodo" / "plantillas" / nombre_plantilla
+    try:
+        texto = ruta.read_text(encoding="utf-8", errors="replace").replace("NNN-slug", unidad)
+    except OSError:
+        return set()
+    return {l.strip() for l in texto.splitlines() if l.strip()}
+
+
+def prosa(unidad):
+    """Prosa real del contrato de la unidad. Los bugs viven en docs/bugs/NNN-slug.md sin
+    carpeta y sin archivarse (ADR-006); el resto, en docs/05-trabajo/ (o en archivo/)."""
+    candidatos = (
+        WORKSPACE / "docs" / "05-trabajo" / unidad / "especificacion.md",
+        WORKSPACE / "docs" / "05-trabajo" / "archivo" / unidad / "especificacion.md",
+        WORKSPACE / "docs" / "bugs" / f"{unidad}.md",
+    )
+    spec = next((c for c in candidatos if c.exists()), None)
+    if spec is None:
+        return -1
+    plantilla = lineas_de_plantilla(
+        "bug.md" if spec.parent.name == "bugs" else "especificacion.md", unidad)
+    return sum(len(l.strip()) for l in spec.read_text(encoding="utf-8", errors="replace").splitlines()
+               if l.strip() and l.strip() not in plantilla and not NO_PROSA.search(l))
+
+
+def main():
+    for linea in sys.stdin:
+        partes = linea.split()
+        if len(partes) < 4:
+            continue
+        if partes[1] == "0" * 40:  # borrado remoto: no nace trabajo nuevo
+            continue
+        ref_remota = partes[2]  # refs/heads/<rama>
+        if not ref_remota.startswith("refs/heads/"):
+            continue  # tags y otras refs no son ramas de trabajo
+        rama = ref_remota.rsplit("/", 1)[-1]
+        if rama == rama_principal() or rama in {"main", "master"}:
+            if not push_principal_trazado(partes[1]) and bloquear_o_avisar(
+                f"push directo no trazado a la principal '{rama}'; el Camino B exige "
+                "que el mismo commit siga contenido en su rama NNN/exprés enlazada"
+            ):
+                return 1
+            continue
+        expres = EXPRES.fullmatch(rama)
+        if expres:
+            if not peticion_expres_valida(expres.group(1), rama):
+                if bloquear_o_avisar(
+                    f"la rama exprés {rama} no conserva una petición evaluada y enlazada"
+                ):
+                    return 1
+            continue
+        if rama.startswith("expres-"):
+            if bloquear_o_avisar(
+                f"rama exprés desconocida '{rama}'; usa expres-P-ID-slug con peticion.py abrir-expres"
+            ):
+                return 1
+            continue
+        if not UNIDAD.fullmatch(rama):
+            if rama not in set(LEGACY.get("ramas", [])) and bloquear_o_avisar(
+                f"rama de trabajo desconocida '{rama}'; usa NNN-slug o expres-P-ID-slug"
+            ):
+                return 1
+            continue
+        referencias = referencias_de_unidad(rama)
+        es_legacy = rama in set(LEGACY.get("ramas", [])) or rama in set(LEGACY.get("unidades", []))
+        if not referencias and not es_legacy:
+            if bloquear_o_avisar(
+                f"la rama {rama} no tiene petición de origen P-ID@revision en su contrato"
+            ):
+                return 1
+            if LEGACY.get("modo") == "observacion":
+                continue
+        invalidas = [
+            referencia for referencia in referencias
+            if not peticion_unidad_valida(referencia, rama)
+        ]
+        if invalidas and not es_legacy:
+            if bloquear_o_avisar(
+                f"la rama {rama} contiene referencias inexistentes, obsoletas o sin "
+                f"enlace recíproco: {', '.join(invalidas)}"
+            ):
+                return 1
+            if LEGACY.get("modo") == "observacion":
+                continue
+        n = prosa(rama)
+        if n >= MIN_PROSA:
+            continue
+        falta = "no existe" if n < 0 else f"solo tiene {n} caracteres de prosa real"
+        sys.stderr.write(
+            f"\nPUSH BLOQUEADO: el contrato de {rama} {falta} (mínimo {MIN_PROSA}).\n"
+            f"Va ANTES que el trabajo: rellena docs/05-trabajo/{rama}/especificacion.md\n"
+            f"(o docs/bugs/{rama}.md si es un bug) en el meta-repo y vuelve a empujar.\n"
+            "Hotfix: el contrato mínimo son 2 minutos.\n\n")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

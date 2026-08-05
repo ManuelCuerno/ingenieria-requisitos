@@ -1,0 +1,33 @@
+# Esta carpeta se clona y se actualiza con `git pull`, así que actualizar no
+# puede fallar nunca. Lo único que aborta un merge es un fichero SIN SEGUIMIENTO
+# y SIN IGNORAR en el camino: los ignorados git los pisa sin rechistar, y por eso
+# aquí se ignora TODO y se desbloquea a mano solo lo que el repo versiona.
+# Cualquier cosa que alguien deje dentro nace ignorada y deja de estorbar.
+# (`git stash` no guarda ficheros sin seguimiento: por eso, sin esto, ni con
+# stash se desatasca un pull.)
+#
+# ¿Fichero nuevo del repo? Añádelo a la lista.
+
+/*
+
+!/.github/
+!/.gitignore
+!/AGENTS.md
+!/CLAUDE.md
+!/GEMINI.md
+!/LICENSE
+!/README.md
+!/RUNBOOK.md
+!/manual-ingenieria-requisitos.html
+!/requirements-dev.txt
+!/plantilla/
+!/visor/
+
+# Y dentro de lo versionado, la basura de siempre.
+__pycache__/
+.DS_Store
+.env
+.env.*
+!.env.example
+*.pem
+*.key

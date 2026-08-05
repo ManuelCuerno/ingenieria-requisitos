@@ -1,0 +1,3 @@
+#!/bin/sh
+set -eu
+exec python3 -m unittest discover -s visor/tests/nightly -p 'test_*.py' -v
