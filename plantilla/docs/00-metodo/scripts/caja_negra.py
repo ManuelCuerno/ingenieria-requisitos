@@ -28,7 +28,6 @@ SEVERIDADES = ("P0", "P1", "P2", "nota")
 # version_metodo y siguen siendo válidas: solo se exige lo que siempre existió.
 OBLIGATORIOS = ("schema", "id", "timestamp", "fase", "sintoma", "esperado", "actual")
 
-DESTINO_ISSUES = "nategentile/ingenieria-requisitos"
 LIMITE_ENVIO = 60 * 1024  # el cuerpo de un issue de GitHub no admite mucho más
 
 # Rutas con el nombre del usuario dentro: en el envío se colapsan a `~`.
@@ -310,28 +309,7 @@ def empaquetar(incidentes, version, limite=None):
         recorte = recorte[1:]
 
 
-def hay_gh():
-    if not shutil.which("gh"):
-        return False
-    comprobacion = subprocess.run(
-        ["gh", "auth", "status"], capture_output=True, text=True, check=False
-    )
-    return comprobacion.returncode == 0
 
-
-def cuerpo_issue(paquete, texto):
-    lineas = [
-        f"Caja negra compartida voluntariamente: {paquete['incluidos']} incidente(s), "
-        f"método {paquete['version_metodo']}.",
-        "Redactado en origen: sin secretos, sin hostname y con las rutas de usuario "
-        "colapsadas a `~`.",
-    ]
-    if paquete["truncado"]:
-        lineas.append(
-            f"TRUNCADO: de {paquete['total_registrados']} incidentes solo viajan los "
-            f"{paquete['incluidos']} más recientes (el paquete no cabía entero)."
-        )
-    return "\n".join(lineas) + "\n\n```json\n" + texto + "\n```\n"
 
 
 def enviar(args):
@@ -343,10 +321,7 @@ def enviar(args):
         return 0
     incidentes = [redactar_incidente(incidente) for incidente in crudos]
     version = version_metodo(repo)
-    con_gh = hay_gh()
-    paquete, texto = empaquetar(
-        incidentes, version, limite=LIMITE_ENVIO if con_gh else None
-    )
+    paquete, texto = empaquetar(incidentes, version, limite=LIMITE_ENVIO)
     # (e) Si tras redactar queda una credencial reconocible, no sale nada de aquí.
     residuo = credencial_residual(texto)
     if residuo:
@@ -372,28 +347,17 @@ def enviar(args):
         if respuesta not in {"s", "si", "sí"}:
             print("No se envió nada.")
             return 0
-    if con_gh:
-        titulo = f"[caja-negra] {paquete['incluidos']} incidentes · método {version}"
-        resultado = subprocess.run(
-            ["gh", "issue", "create", "--repo", DESTINO_ISSUES,
-             "--title", titulo, "--body-file", "-"],
-            input=cuerpo_issue(paquete, texto),
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        if resultado.returncode == 0:
-            print(f"Enviado. Gracias — el issue: {resultado.stdout.strip()}")
-            return 0
-        print("gh no pudo crear el issue; te dejo el paquete en un fichero.")
+    # Un issue en un repo público NO es un canal válido para esto: la redacción quita
+    # credenciales, pero no puede quitar la semántica del negocio del usuario (nombres,
+    # importes, procesos). Hasta que exista un canal PRIVADO, este comando solo empaqueta.
     fecha = datetime.date.today().isoformat()
     destino = repo / ".caja-negra" / f"envio-{fecha}.json"
     destino.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     destino.write_text(texto + "\n", encoding="utf-8")
     print(f"Paquete guardado en {destino} (no se ha enviado nada).")
-    print("Si quieres compartirlo: abre un issue en "
-          f"https://github.com/{DESTINO_ISSUES}/issues y pega o adjunta ese fichero. "
-          "Es voluntario.")
+    print("El canal de entrega privado está en preparación; cuando exista, este mismo "
+          "comando lo usará. Mientras tanto el paquete es tuyo: compártelo solo por un "
+          "medio privado si quieres hacerlo llegar.")
     return 0
 
 
