@@ -25,8 +25,12 @@ from pathlib import Path
 
 try:
     import fcntl
-except ImportError:  # pragma: no cover - la plantilla avisa del límite en Windows
+except ImportError:  # pragma: no cover - en Windows el candado lo da msvcrt
     fcntl = None
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
 
 
 class LeaseError(RuntimeError):
@@ -45,8 +49,70 @@ def ahora():
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
 
 
+def _pid_vivo(pid):
+    """True si existe un proceso local con ese PID.
+
+    En Windows NO vale os.kill(pid, 0): allí cualquier señal que no sea de
+    consola TERMINA el proceso vía TerminateProcess en vez de sondearlo.
+    (Duplicado de control_plane.pid_vivo: este módulo se carga standalone.)
+    """
+    if os.name == "nt":  # pragma: no cover - rama Windows, la ejercita su CI
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        ERROR_ACCESS_DENIED = 5
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid)
+        )
+        if not handle:
+            return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+        try:
+            codigo = ctypes.c_ulong()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(codigo)):
+                return codigo.value == STILL_ACTIVE
+            return True
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return True
+
+
+def _marca_arranque_windows(pid):  # pragma: no cover - rama Windows, la ejercita su CI
+    import ctypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    if not handle:
+        return ""
+    try:
+        # GetProcessTimes rellena cuatro FILETIME de 8 bytes: creación, salida,
+        # kernel y usuario. Solo interesa la creación.
+        tiempos = (ctypes.c_ulonglong * 4)()
+        if kernel32.GetProcessTimes(
+            handle,
+            ctypes.byref(tiempos, 0),
+            ctypes.byref(tiempos, 8),
+            ctypes.byref(tiempos, 16),
+            ctypes.byref(tiempos, 24),
+        ):
+            return f"win:{tiempos[0]}"
+        return ""
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def process_start_marker(pid):
     """Identidad estable de una encarnación de PID, no solo su número."""
+    if os.name == "nt":  # pragma: no cover - rama Windows, la ejercita su CI
+        return _marca_arranque_windows(pid) or "desconocido"
     proc = Path("/proc") / str(pid) / "stat"
     try:
         campos = proc.read_text(encoding="utf-8").split()
@@ -161,19 +227,31 @@ class LeaseManager:
 
     @contextlib.contextmanager
     def _coordinator(self):
-        if fcntl is None:
-            raise LeaseError(
-                "los leases locales requieren flock; este sistema no lo ofrece y la "
-                "operación concurrente se bloquea por seguridad"
-            )
         self._ensure_directory(self.root, "raíz de leases")
         lock_path = self.root / "coordinator.lock"
-        with lock_path.open("a+", encoding="utf-8") as stream:
-            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        descriptor = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            if fcntl is not None:
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                liberar = lambda: fcntl.flock(descriptor, fcntl.LOCK_UN)
+            elif msvcrt is not None:
+                if os.fstat(descriptor).st_size == 0:
+                    os.write(descriptor, b"0")
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
+                liberar = lambda: msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+            else:
+                raise LeaseError(
+                    "los leases locales requieren un lock exclusivo del sistema "
+                    "(flock o msvcrt.locking); este sistema no ofrece ninguno y la "
+                    "operación concurrente se bloquea por seguridad"
+                )
             try:
                 yield
             finally:
-                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+                liberar()
+        finally:
+            os.close(descriptor)
 
     def _path(self, scope):
         return self.active / f"{_scope_key(scope)}.json"
@@ -267,12 +345,8 @@ class LeaseManager:
         pid = owner.get("pid")
         if not isinstance(pid, int):
             return False
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+        if not _pid_vivo(pid):
             return False
-        except PermissionError:
-            pass
         return process_start_marker(pid) == owner.get("process_started")
 
     def _active_records(self):

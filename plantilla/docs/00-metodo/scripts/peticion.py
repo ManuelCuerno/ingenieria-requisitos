@@ -157,13 +157,8 @@ def cmd_desbloquear(args):
     pid = owner.get("pid")
     vivo = False
     if host == socket.gethostname() and isinstance(pid, int):
-        try:
-            os.kill(pid, 0)
-            vivo = True
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            vivo = True
+        # En Windows os.kill(pid, 0) MATA el proceso en vez de sondearlo.
+        vivo = control_plane.pid_vivo(pid)
     if vivo:
         raise ErrorPeticion(f"el proceso {pid} sigue vivo; no se retira su lock")
     if host and host != socket.gethostname() and not args.forzar:

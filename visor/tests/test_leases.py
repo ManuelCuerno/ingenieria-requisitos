@@ -197,6 +197,41 @@ class LeaseTests(unittest.TestCase):
     def test_failpoint_sin_entorno_no_hace_nada(self):
         self.lease.failpoint("despues_precondiciones")
 
+    def test_sin_ningun_mecanismo_de_lock_falla_cerrado(self):
+        self.lease.fcntl = None
+        self.lease.msvcrt = None
+        with self.assertRaises(self.lease.LeaseError):
+            self.manager("sesion-a").acquire("unit:004")
+
+    def test_coordinator_usa_msvcrt_cuando_no_hay_fcntl(self):
+        # Doble de la rama Windows: verifica que el coordinator bloquea y
+        # libera con msvcrt.locking; la semántica real la ejercita el CI de
+        # Windows con toda la suite.
+        llamadas = []
+
+        class MsvcrtDoble:
+            LK_LOCK = "LK_LOCK"
+            LK_UNLCK = "LK_UNLCK"
+
+            @staticmethod
+            def locking(descriptor, modo, cuantos):
+                llamadas.append(modo)
+
+        self.lease.fcntl = None
+        self.lease.msvcrt = MsvcrtDoble
+        adquirido = self.manager("sesion-a").acquire("unit:004")
+        adquirido.release()
+        self.assertIn("LK_LOCK", llamadas)
+        self.assertIn("LK_UNLCK", llamadas)
+        candado = self.workspace / ".runtime/leases/coordinator.lock"
+        self.assertTrue(candado.is_file())
+        self.assertGreater(candado.stat().st_size, 0)
+
+    def test_pid_vivo_distingue_procesos_reales_de_inexistentes(self):
+        self.assertTrue(self.lease._pid_vivo(os.getpid()))
+        # Muy por encima del máximo de PID de macOS y del default de Linux.
+        self.assertFalse(self.lease._pid_vivo(2**22 + 12345))
+
 
 if __name__ == "__main__":
     unittest.main()

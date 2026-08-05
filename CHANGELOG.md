@@ -4,6 +4,16 @@ La versión del método viaja con cada proyecto (en su `METODO.json`). Para llev
 estas mejoras a tus proyectos ya creados: abre tu agente aquí y dile «pon al día
 mis proyectos».
 
+## 1.1.1 — 2026-08-05
+
+- **Actualizar ya no se bloquea por trabajo a medias.** Si un proyecto tiene
+  unidades abiertas, se te avisa con su lista y el método se actualiza igual;
+  tu trabajo queda intacto y esas unidades cerrarán ya con las reglas nuevas.
+- **Windows funciona.** Poner al día los proyectos ya no falla por `flock`: en
+  Windows se usa el candado nativo del sistema. Y comprobar si otra sesión
+  sigue viva es seguro también allí (antes, en Windows, esa comprobación podía
+  matar el proceso que estaba mirando).
+
 ## 1.1.0 — 2026-08-05
 
 Primera versión numerada. Qué trae:

@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import re
 import shlex
 import sys
@@ -29,6 +30,40 @@ TEST_NAME = re.compile(r"(?:^|[-_])(test|testing|e2e|ci)(?:[-_]|$)", re.I)
 PRODUCTION_NAME = re.compile(
     r"(?:^|[-_.])(?:prod(?:uction)?|live|principal)\d*(?:[-_.]|$)", re.I
 )
+
+
+def pid_vivo(pid):
+    """True si existe un proceso local con ese PID.
+
+    En Windows NO vale os.kill(pid, 0): allí cualquier señal que no sea de
+    consola TERMINA el proceso vía TerminateProcess en vez de sondearlo.
+    """
+    if os.name == "nt":  # pragma: no cover - rama Windows, la ejercita su CI
+        import ctypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        ERROR_ACCESS_DENIED = 5
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        handle = kernel32.OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid)
+        )
+        if not handle:
+            return ctypes.get_last_error() == ERROR_ACCESS_DENIED
+        try:
+            codigo = ctypes.c_ulong()
+            if kernel32.GetExitCodeProcess(handle, ctypes.byref(codigo)):
+                return codigo.value == STILL_ACTIVE
+            return True
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return True
 
 
 class ControlPlaneError(ValueError):
