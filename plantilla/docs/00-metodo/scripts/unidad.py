@@ -883,13 +883,32 @@ def _cmd_despachar(args, autoridad, snapshot=None):
         return 1
 
     if args.documental and fm.get("tipo") not in {
-        "auditoria", "investigacion", "documentacion"
+        "auditoria", "investigacion", "documentacion", "bug"
     }:
         fail(
-            "--documental solo vale para auditoria, investigacion o documentacion "
-            "que NO tocan el repositorio de código"
+            "--documental solo vale para auditoria, investigacion, documentacion "
+            "o un bug del META-repo que NO toca el repositorio de código"
         )
         return 1
+    if args.documental and fm.get("tipo") == "bug":
+        # Un bug del propio meta-repo (un runbook roto, un script del método, una ficha) no
+        # necesita rama ni worktree de código: despacharlo como código creaba un worktree
+        # inútil y un cierre imposible (pasó dos veces en campo). La prueba ejecutable de que
+        # es meta es su `ficheros:`: declarado, y sin una sola ruta dentro de main/.
+        rutas_bug = ficheros_de(fm)
+        if not rutas_bug:
+            fail(
+                "--documental en un bug exige declarar `ficheros:` en la ficha "
+                "(todas las rutas fuera de main/): es la prueba de que el bug es del meta-repo"
+            )
+            return 1
+        dentro_codigo = sorted(r for r in rutas_bug if r == "main" or r.startswith("main/"))
+        if dentro_codigo:
+            fail(
+                f"--documental no vale: la ficha declara rutas del repo de código "
+                f"({', '.join(dentro_codigo)}). Un bug que toca main/ se despacha normal"
+            )
+            return 1
     if args.documental and args.force:
         fail("--documental no se combina con --force; un hotfix siempre toca código")
         return 1

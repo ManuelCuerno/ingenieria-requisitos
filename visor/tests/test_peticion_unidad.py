@@ -577,6 +577,60 @@ class PeticionUnidadTest(unittest.TestCase):
         self.assertIn("ruta", resultado.stderr.lower())
         self.assertFalse((self.ws / "docs/05-trabajo/001-ruta-distinta").exists())
 
+    def preparar_bug_aprobado(self, slug, ficheros):
+        nombre = self.preparar_hotfix(slug, ficheros=ficheros)
+        ficha = self.ws / "docs/bugs" / f"{nombre}.md"
+        texto = ficha.read_text(encoding="utf-8")
+        texto = re.sub(
+            r"^aprobado:.*$",
+            f"aprobado: {datetime.date.today().isoformat()}",
+            texto,
+            count=1,
+            flags=re.M,
+        )
+        texto += (
+            "\n## Reporte\n\n"
+            "El usuario esperaba que el runbook del carril corto describiera el paso de "
+            "cierre tal y como lo ejecuta el script, pero el documento sigue contando el "
+            "orden antiguo y el agente que lo siguió dejó la unidad a medio cerrar. Pasa "
+            "siempre que se llega al paso seis con la sesión recién abierta. Severidad P2: "
+            "no rompe datos, pero cada sesión nueva tropieza igual. Triaje: corregir el "
+            "texto del runbook y contrastarlo con el script de cierre real.\n"
+        )
+        ficha.write_text(texto, encoding="utf-8")
+        return nombre
+
+    def test_bug_del_meta_repo_se_despacha_documental_sin_worktree(self):
+        nombre = self.preparar_bug_aprobado(
+            "runbook-roto", ficheros=["docs/00-metodo/runbooks/bug.md"]
+        )
+
+        resultado = self.ejecutar(self.unidad, "despachar", nombre, "--documental")
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertFalse((self.ws / "worktrees" / nombre).exists())
+        ficha = (self.ws / "docs/bugs" / f"{nombre}.md").read_text(encoding="utf-8")
+        self.assertIn("ejecucion: documental", ficha)
+
+    def test_bug_que_toca_main_no_puede_ir_documental(self):
+        nombre = self.preparar_bug_aprobado(
+            "toca-codigo", ficheros=["docs/bugs/INDICE.md", "main/app/x.py"]
+        )
+
+        resultado = self.ejecutar(self.unidad, "despachar", nombre, "--documental")
+
+        self.assertEqual(resultado.returncode, 1)
+        self.assertIn("main/app/x.py", resultado.stderr)
+        self.assertIn("se despacha normal", resultado.stderr)
+
+    def test_bug_documental_sin_ficheros_declarados_no_pasa(self):
+        nombre = self.preparar_bug_aprobado("sin-rutas", ficheros=None)
+
+        resultado = self.ejecutar(self.unidad, "despachar", nombre, "--documental")
+
+        self.assertEqual(resultado.returncode, 1)
+        self.assertIn("ficheros", resultado.stderr)
+
     def test_despacho_bloquea_si_la_peticion_cambio_de_revision(self):
         pid = self.capturar()
         self.evaluar(pid)

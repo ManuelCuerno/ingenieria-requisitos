@@ -37,7 +37,9 @@ recorta nada—, pero el nivel de test es el que demuestra ESTE bug y construye 
    GitHub) con su checkout en `worktrees/NNN-slug`, deja la ficha
    en `en_obra`, y **aplica las precondiciones** (ficha con prosa real, tope de trabajo en
    vuelo, rama no reutilizada). **El camino manual las salta todas: no se usa.** `--force` es la
-   válvula EXCLUSIVA de `hotfix.md`. Con el worktree creado, el padre usa el comando
+   válvula EXCLUSIVA de `hotfix.md`. Si el bug es del PROPIO meta-repo (un runbook, un script
+   del método, una ficha) y su `ficheros:` no toca `main/`, se despacha con `--documental`:
+   sin rama ni worktree de código, y el cierre no exige un merge que nunca existirá. Con el worktree creado, el padre usa el comando
    `ejecucion.py lanzar` que imprime el despacho para abrir el **subagente del bug**. El control
    plane impone cwd, rama y sandbox; el agente escribe SOLO en su worktree y en SU fichero
    `docs/bugs/NNN-slug.md`. Después,
