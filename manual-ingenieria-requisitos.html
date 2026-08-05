@@ -3999,7 +3999,7 @@ ninguna de las cuatro ──► CIERRE BLOQUEADO
         <ol class="steps">
           <li><strong>Encontrar</strong> — <code>actualizar.py buscar</code> rastrea tu carpeta de usuario y las de trabajo habituales (<code>--en /ruta</code> si viven en otro sitio). El registro local solo conoce lo creado en <em>esta</em> máquina.</li>
           <li><strong>Enseñar la foto y preguntar</strong> — <code>actualizar.py revisar --todos</code>: qué ficheros cambian y cuáles hay allí que el método ya no publica (esos <strong>no se borran</strong>, solo se avisan). Se cuenta en cristiano y <strong>se te pregunta cuáles quieres actualizar</strong>.</li>
-          <li><strong>Aplicar</strong> — <code>actualizar.py aplicar --todos</code>. Toma autoridad exclusiva y exige árbol e índice limpios, sin fichas en vuelo; un remoto adelantado o trabajo ajeno bloquean antes de tocar el método.</li>
+          <li><strong>Aplicar</strong> — <code>actualizar.py aplicar --todos</code>. Toma autoridad exclusiva y exige árbol e índice limpios; un remoto adelantado o trabajo ajeno bloquean antes de tocar el método. Las fichas en vuelo no bloquean: se avisan con su lista y el trabajo queda intacto.</li>
           <li><strong>Enseñar el resultado</strong> — <code>git log --oneline -2</code> y <code>git show</code>, contado en negocio.</li>
         </ol>
 

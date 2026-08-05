@@ -2,6 +2,9 @@
 
 **Estado:** aceptada · **Fecha:** 2026-08-05
 
+**Nota:** el bloqueo de Modo D por fichas con trabajo en vuelo lo supera ADR-025 (pasa a ser
+aviso); el resto sigue vigente.
+
 ## Contexto
 
 Dos harnesses trabajaron sobre el mismo metarrepo; Modo D actualizó mientras una auditoría

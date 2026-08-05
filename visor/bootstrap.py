@@ -113,6 +113,7 @@ DECISIONES = (
     "022-control-plane-de-ejecucion.md",
     "023-control-plane-concurrencia-local.md",
     "024-control-plane-de-seguridad-y-evidencia-causal.md",
+    "025-el-trabajo-aparcado-no-bloquea-el-modo-d.md",
 )
 METODO_RAIZ = (
     "README.md", "VERSION", "roles.md", "comunicacion.md", "auditoria-calidad.md",

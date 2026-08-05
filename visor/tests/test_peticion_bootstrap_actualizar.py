@@ -561,13 +561,19 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         ).stdout)
         self.assertFalse((ws / "docs/00-metodo/scripts/peticion.py").exists())
 
-    def test_actualizar_bloquea_unidad_en_obra_aunque_el_arbol_este_limpio(self):
+    def test_actualizar_avisa_del_trabajo_en_vuelo_y_aplica(self):
+        # ADR-025: una unidad aparcada no bloquea la actualización; se avisa
+        # con su lista, el método entra y la ficha queda intacta. La unidad
+        # es una en_obra legítima (aprobada y con plan): una en_obra sin
+        # aprobación es un workspace roto y ahí el linter post-update revierte.
         ws = self.workspace_antiguo()
         ficha = ws / "docs/05-trabajo/001-antigua/especificacion.md"
         ficha.write_text(
             ficha.read_text(encoding="utf-8").replace(
                 "estado: planificada", "estado: en_obra"
-            ),
+            ).replace(
+                "aprobado: no", "aprobado: 2026-08-01"
+            ) + "\n## Plan de trabajo\n\n- [ ] paso pendiente\n",
             encoding="utf-8",
         )
         subprocess.run(["git", "add", str(ficha)], cwd=ws, check=True)
@@ -578,9 +584,12 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
 
         resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
 
-        self.assertNotEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
-        self.assertIn("001-antigua", resultado.stdout + resultado.stderr)
-        self.assertFalse((ws / "docs/00-metodo/scripts/peticion.py").exists())
+        salida = resultado.stdout + resultado.stderr
+        self.assertEqual(resultado.returncode, 0, salida)
+        self.assertIn("001-antigua", salida)
+        self.assertIn("trabajo en vuelo", salida)
+        self.assertTrue((ws / "docs/00-metodo/scripts/peticion.py").exists())
+        self.assertIn("estado: en_obra", ficha.read_text(encoding="utf-8"))
 
     def test_actualizar_bloquea_si_origin_avanza_antes_de_tocar(self):
         ws = self.workspace_antiguo()

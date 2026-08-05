@@ -801,8 +801,11 @@ def _aplicar_bajo_lease(workspace, titulo, autoridad):
         return 1
     activas = trabajo_en_vuelo(workspace)
     if activas:
-        print("\n    NO TOCO NADA: hay trabajo en vuelo declarado: " + ", ".join(activas))
-        return 1
+        # ADR-025: el trabajo aparcado no bloquea. El riesgo que motivaba el bloqueo
+        # lo cierran el lease de workspace, el árbol limpio y el stage exacto.
+        print("\n    OJO, trabajo en vuelo declarado: " + ", ".join(activas))
+        print("    Actualizo igualmente: tu trabajo queda intacto y esas unidades "
+              "cerrarán ya con el método nuevo.")
     sha, motivo = punto_de_retorno(workspace)
     if sha is None:
         print(f"\n    NO TOCO NADA: {motivo}")

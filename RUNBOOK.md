@@ -884,8 +884,9 @@ distancia. Si no hay un punto de retorno limpio, no se toca nada y se dice por q
    de uno). Adquiere autoridad exclusiva sobre el workspace y su índice Git: si otra
    sesión mantiene una operación incompatible, PARA antes de escribir y dice quién la posee.
    Hace `fetch` antes del punto de retorno y bloquea si el remoto avanzó. Exige árbol e índice
-   limpios y bloquea si una ficha declara trabajo en vuelo: nunca stagea ni commitea trabajo
-   ajeno. Si aparece trabajo después, las rutas explícitas también lo dejan fuera. Sobrescribe el método, lo anota
+   limpios: nunca stagea ni commitea trabajo ajeno. Una ficha con trabajo en vuelo no bloquea
+   (ADR-025): se avisa con su lista, el trabajo queda intacto y esas unidades cerrarán ya con
+   el método nuevo. Si aparece trabajo después, las rutas explícitas también lo dejan fuera. Sobrescribe el método, lo anota
    en el HISTORIAL y pasa el linter de ese workspace **antes** del commit final.
    Si el proceso cae, la siguiente ejecución recupera primero el snapshot durable de
    `.runtime/transactions/modo-d.json`. Si el linter falla, restaura únicamente las rutas tocadas y devuelve error:

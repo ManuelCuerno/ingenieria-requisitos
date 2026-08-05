@@ -88,7 +88,9 @@ Las garantías, que son lo importante:
 - **Se te enseña antes de tocar nada.** `revisar` no escribe.
 - **No se pisa lo que tú hayas adaptado.** Si en un proyecto cambiaste una regla
   del método a propósito, se queda como está y te lo señala para que decidas tú.
-- **No se actualiza un proyecto con trabajo a medias**: primero se cierra.
+- **El trabajo a medias ni bloquea ni se toca.** Si hay unidades abiertas se te
+  avisa con su lista y el método se actualiza por debajo; tu trabajo queda
+  intacto.
 - **Solo se toca el método.** Tus planos, tu trabajo, `repos.yaml` y tu código
   (`main/`) están fuera de alcance, y nada se borra nunca por sobrar.
 - **La trazabilidad nueva entra en observación.** La actualización guarda en
