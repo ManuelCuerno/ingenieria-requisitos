@@ -18,6 +18,8 @@ import shutil
 import socket
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 import uuid
 from pathlib import Path
 
@@ -28,7 +30,13 @@ SEVERIDADES = ("P0", "P1", "P2", "nota")
 # version_metodo y siguen siendo válidas: solo se exige lo que siempre existió.
 OBLIGATORIOS = ("schema", "id", "timestamp", "fase", "sintoma", "esperado", "actual")
 
-LIMITE_ENVIO = 60 * 1024  # el cuerpo de un issue de GitHub no admite mucho más
+# Canal PRIVADO de entrega del feedback (decisión de producto 2026-08-05: repo público,
+# feedback nunca público). Vacío = sin canal: `enviar` solo empaqueta en local. Cuando el
+# endpoint exista, una actualización del método (Modo D) rellena esta constante y los
+# workspaces la reciben; el contrato del endpoint vive con el autor de la herramienta.
+ENDPOINT_FEEDBACK = ""
+
+LIMITE_ENVIO = 60 * 1024  # tope del paquete: suficiente contexto sin volcar historia entera
 
 # Rutas con el nombre del usuario dentro: en el envío se colapsan a `~`.
 RE_HOME = re.compile(r"/(?:Users|home)/[^/\s\"'\\]+")
@@ -347,17 +355,38 @@ def enviar(args):
         if respuesta not in {"s", "si", "sí"}:
             print("No se envió nada.")
             return 0
-    # Un issue en un repo público NO es un canal válido para esto: la redacción quita
-    # credenciales, pero no puede quitar la semántica del negocio del usuario (nombres,
-    # importes, procesos). Hasta que exista un canal PRIVADO, este comando solo empaqueta.
+    # La entrega SOLO va a un canal privado. Un sitio público (un issue, un foro) no vale:
+    # la redacción quita credenciales, pero no la semántica del negocio del usuario.
+    if ENDPOINT_FEEDBACK:
+        peticion = urllib.request.Request(
+            ENDPOINT_FEEDBACK,
+            data=texto.encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "X-Metodo-Version": version,
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(peticion, timeout=20) as respuesta_http:
+                if 200 <= respuesta_http.status < 300:
+                    print("Enviado por el canal privado. Gracias: esto mejora el método.")
+                    return 0
+                estado = respuesta_http.status
+        except (urllib.error.URLError, OSError) as exc:
+            estado = exc
+        print(f"El canal privado no respondió bien ({estado}); te dejo el paquete en local.")
     fecha = datetime.date.today().isoformat()
     destino = repo / ".caja-negra" / f"envio-{fecha}.json"
     destino.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     destino.write_text(texto + "\n", encoding="utf-8")
     print(f"Paquete guardado en {destino} (no se ha enviado nada).")
-    print("El canal de entrega privado está en preparación; cuando exista, este mismo "
-          "comando lo usará. Mientras tanto el paquete es tuyo: compártelo solo por un "
-          "medio privado si quieres hacerlo llegar.")
+    if not ENDPOINT_FEEDBACK:
+        print("El canal de entrega privado está en preparación; cuando exista, este mismo "
+              "comando lo usará. Mientras tanto el paquete es tuyo: compártelo solo por un "
+              "medio privado si quieres hacerlo llegar.")
+    else:
+        print("Puedes reintentar `enviar` más tarde; el paquete no viaja a ningún sitio solo.")
     return 0
 
 

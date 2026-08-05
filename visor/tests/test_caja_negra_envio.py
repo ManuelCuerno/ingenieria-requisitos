@@ -140,6 +140,59 @@ class EnvioSinGhTest(unittest.TestCase):
         self.assertIn(str(envios[0]), salida)
         self.assertIn("voluntario", salida.lower())
 
+    def test_con_endpoint_entrega_por_post_y_no_escribe_fichero(self):
+        self.escribir_jsonl([incidente_crudo()])
+        capturas = {}
+
+        class RespuestaOK:
+            status = 200
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        def urlopen_falso(peticion, timeout=None):
+            capturas["url"] = peticion.full_url
+            capturas["cuerpo"] = peticion.data.decode("utf-8")
+            capturas["version"] = peticion.get_header("X-metodo-version")
+            return RespuestaOK()
+
+        original = (caja_negra.ENDPOINT_FEEDBACK, caja_negra.urllib.request.urlopen)
+        caja_negra.ENDPOINT_FEEDBACK = "https://feedback.invalido.local/entrada"
+        caja_negra.urllib.request.urlopen = urlopen_falso
+        try:
+            codigo, salida = self.enviar_sin_gh()
+        finally:
+            caja_negra.ENDPOINT_FEEDBACK, caja_negra.urllib.request.urlopen = original
+
+        self.assertEqual(codigo, 0)
+        self.assertIn("canal privado", salida)
+        self.assertEqual(capturas["url"], "https://feedback.invalido.local/entrada")
+        self.assertEqual(capturas["version"], "1.1.0")
+        self.assertNotIn("SENTINEL-DSN", capturas["cuerpo"])
+        self.assertEqual(list((self.repo / ".caja-negra").glob("envio-*.json")), [])
+
+    def test_endpoint_caido_deja_el_paquete_en_local_y_lo_dice(self):
+        self.escribir_jsonl([incidente_crudo()])
+
+        def urlopen_roto(peticion, timeout=None):
+            raise caja_negra.urllib.error.URLError("sin red")
+
+        original = (caja_negra.ENDPOINT_FEEDBACK, caja_negra.urllib.request.urlopen)
+        caja_negra.ENDPOINT_FEEDBACK = "https://feedback.invalido.local/entrada"
+        caja_negra.urllib.request.urlopen = urlopen_roto
+        try:
+            codigo, salida = self.enviar_sin_gh()
+        finally:
+            caja_negra.ENDPOINT_FEEDBACK, caja_negra.urllib.request.urlopen = original
+
+        self.assertEqual(codigo, 0)
+        self.assertIn("no respondió bien", salida)
+        self.assertEqual(len(list((self.repo / ".caja-negra").glob("envio-*.json"))), 1)
+        self.assertIn("reintentar", salida)
+
     def test_credencial_residual_aborta_sin_ensenar_ni_escribir_nada(self):
         clave = "-----BEGIN RSA PRIVATE KEY-----\nMIIEmuydangerous\n-----END RSA PRIVATE KEY-----"
         self.escribir_jsonl([incidente_crudo(sintoma=f"volcado accidental {clave}")])
