@@ -120,22 +120,19 @@ mueve el mapa, toca hotspots o no cabe en una ficha— es carril normal, que es 
    PENDIENTE DE APROBACIÓN; el `estado: en_revision` lo escribe el padre al recibir el PR (regla 2). Sorpresas → `hallazgos.md`.
    Contradicción con la spec o el mapa → **PARAR y devolver la tarea**.
 6. **Cierre (el padre, a petición del usuario).** Es el ritual indivisible de
-   `runbooks/cierre.md` (con `gh` y sin `gh`), cerrado con `unidad.py cerrar` — aquí solo lo
-   específico de una feature. Resumen de los 10 pasos en
-   `00-metodo/README.md` — aquí solo lo específico de una feature. Verificar la evidencia
-   (¿el output es real y completo?) → revisor fresco (sesión/subagente nuevo, solo lectura):
-   *"Revisa el diff contra especificacion.md: cada R\* implementado, los casos límite con
-   test, y nada fuera de los ficheros declarados. Comprueba además que los ficheros de test
-   NO se modificaron después del commit que los creó —ni se debilitaron, ni se borraron, ni se
-   marcaron como saltados para que pasara el código— y que la feature no DUPLICA funcionalidad
-   que ya existía en otro módulo de `main/`. Reporta solo huecos de corrección, no
-   preferencias de estilo."* — veredicto a la sección **Revisión** del `hallazgos.md`; huecos
-   de corrección → vuelven al constructor; limpio → merge del PR → **suite end-to-end
-   completa sobre main** → **el padre lanza una instancia de la app** (comando de arranque:
-   el `AGENTS.md` del repo de código) y el usuario la valida en **modo novato**, probando los
-   ejemplos reales de los R\*. `<HARD-GATE>` Sin ese OK no hay cierre; "no es lo que pedí" →
-   nueva unidad tipo `bug`. Con el OK, consolidar: aplicar los Deltas a `02-flujos/` y pasar
-   el flujo del mapa a **`entregada`** · cosechar `hallazgos.md` (conocimiento/, ADRs, nuevas
-   unidades al ROADMAP — lo crea la fase 4, `runbooks/planificacion.md`; mientras no exista,
-   se quedan anotadas en `hallazgos.md`) · actualizar `ESTADO.md` + `INDICE.md` · mover la unidad a `archivo/`
-   · borrar worktree y rama (estado → `mergeada`).
+   `runbooks/cierre.md` (con `gh` y sin `gh`), cerrado con `unidad.py cerrar`; resumen de
+   los 7 pasos en `00-metodo/README.md` — aquí solo lo específico de una feature:
+   - **El prompt del revisor fresco** (sesión/subagente nuevo, solo lectura): *"Revisa el
+     diff contra especificacion.md: cada R\* implementado, los casos límite con test, y nada
+     fuera de los ficheros declarados. Comprueba además que los ficheros de test NO se
+     modificaron después del commit que los creó —ni se debilitaron, ni se borraron, ni se
+     marcaron como saltados para que pasara el código— y que la feature no DUPLICA
+     funcionalidad que ya existía en otro módulo de `main/`. Reporta solo huecos de
+     corrección, no preferencias de estilo."*
+   - **La validación del usuario es en modo novato**, probando los ejemplos reales de los
+     R\*. `<HARD-GATE>` Sin ese OK no hay cierre; "no es lo que pedí" → nueva unidad tipo
+     `bug`.
+   - **Al consolidar:** aplicar los Deltas a `02-flujos/` y pasar el flujo del mapa a
+     **`entregada`** · cosechar `hallazgos.md` (conocimiento/, ADRs, nuevas unidades al
+     ROADMAP — lo crea la fase 4, `runbooks/planificacion.md`; mientras no exista, se quedan
+     anotadas en `hallazgos.md`).

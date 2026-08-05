@@ -1,9 +1,10 @@
-# ADR-NNN · <la decisión en una frase, no el tema>
+# DP-NNN · <la decisión en una frase, no el tema>
 
 **Estado: ACEPTADA — YYYY-MM-DD. Decisor: <quién y de dónde salió: sesión, auditoría, ADR previo>.**
 
-> Esqueleto de los ADR de `docs/decisiones/` (fichero `NNN-slug.md`, numeración propia,
-> nunca se renumera). Un ADR registra un porqué que el código no puede contar solo.
+> Esqueleto de las decisiones de `docs/decisiones/` (fichero `NNN-slug.md`, numeración
+> propia, nunca se renumera; se citan como `DP-NNN`, nunca como `ADR-NNN` — eso nombra
+> siempre un ADR del método). Una decisión registra un porqué que el código no cuenta solo.
 > Solo lo escribe el padre; las decisiones de contrato las toma un humano (AGENTS.md).
 > Un ADR **no se edita para cambiar de opinión**: se escribe otro que lo supere.
 

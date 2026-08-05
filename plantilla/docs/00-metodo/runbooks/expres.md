@@ -20,7 +20,7 @@ Cabe en una frase (si necesitas dos, no es exprés) **y** nadie que use la app n
 
 `<HARD-GATE>` **Un bug JAMÁS es exprés, sin excepciones.** Un bug restaura comportamiento
 prometido, luego cambia comportamiento, y lo que cambia comportamiento nunca es exprés
-(`00-metodo/README.md`, los 3 carriles). No importa que el diff quepa en una frase ni que sea
+(`00-metodo/README.md`, §Los 4 carriles). No importa que el diff quepa en una frase ni que sea
 "solo texto": una errata que ve el usuario es comportamiento observable. Este carril **no
 tiene ficha, ni `NNN`, ni test rojo, ni OK del usuario** — es decir, no tiene ninguna de las
 tres cosas que hacen verificable el arreglo de un bug. Si lo que llega es "esto está mal" →
@@ -43,12 +43,13 @@ puertas, que es donde cae casi todo lo que se cuela mal por aquí.
    `expres-P-ID-<slug-corto>`; el padre añade su worktree efímero. `ESTADO.md` no se toca:
    no hay unidad que censar.
 3. **Obra: construye el padre** (ADR-017), a la vista del usuario. Hace EXACTAMENTE el cambio
-   de la frase y nada más. Corre la
-   **tests del área tocada**: verde obligatorio. Si no puede delimitar el área, corre la suite.
+   de la frase y nada más. Corre los tests del **área tocada** (ADR-016): verde obligatorio.
+   Si no puede delimitar el área, corre la suite.
 4. **Pull request.** Commit, push y PR con `expres` en el título. En el cuerpo: la frase del
-   cambio y el **output de la suite pegado** — no hay `hallazgos.md`, así que esa es la única
+   cambio y el **output de esos tests pegado** — no hay `hallazgos.md`, así que esa es la única
    evidencia que existirá. Sin output pegado no hay merge.
-5. **Cierre (el padre).** Revisor fresco → verificar el verde → merge → reconciliar el P-ID
+5. **Cierre (el padre).** Verificar el verde (sin revisor: en exprés la única puerta es el
+   verde, `runbooks/cierre.md`) → merge → reconciliar el P-ID
    con evidencia → borrar worktree y rama. Se acabó: **NO
    se archiva nada** (no hay unidad) y **NO se toca `02-flujos/`** (si hubiera que tocar el
    mapa, no era exprés). Mientras el worktree exista el linter lo canta como huérfano: es el

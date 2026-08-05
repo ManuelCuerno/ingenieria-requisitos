@@ -89,7 +89,8 @@ recorta nada—, pero el nivel de test es el que demuestra ESTE bug y construye 
    contraprobados (rojo sin el arreglo, verde con él), y que no se tocó nada fuera del alcance
    del bug. Reporta solo huecos de corrección, no preferencias de estilo."* — veredicto a la
    sección 6 · Cierre de la ficha; huecos → vuelven al subagente.
-   Limpio → merge del PR → **suite end-to-end completa** sobre main → **lanzar una instancia
+   Limpio → merge del PR → **tests sobre main al nivel del carril** (ADR-016; tabla en
+   `runbooks/cierre.md`) → **lanzar una instancia
    de la app** (comando de arranque: el `AGENTS.md` del repo de código) y el usuario la prueba.
    `<HARD-GATE>` **Sin ese OK no hay cierre**: el estado NO pasa a `mergeada` y el bug sigue
    ABIERTO (`en_revision`). Con el OK → estado `mergeada`, sección Cierre rellenada

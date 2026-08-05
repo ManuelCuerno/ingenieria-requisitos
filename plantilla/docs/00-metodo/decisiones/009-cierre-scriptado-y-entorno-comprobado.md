@@ -1,5 +1,11 @@
 # ADR-009 — El cierre se scripta, el entorno se comprueba y el revisor tiene frontera
 
+> **Nota de supersesión parcial (2026-08-05):** dos detalles de abajo quedaron superados.
+> La regla 1 decía borrar la rama «local **y remota**»: desde **ADR-011** la rama remota
+> **NO se borra nunca** (es la única copia del trabajo fuera del disco y la prueba que mira
+> el cierre). Y el último párrafo habla de tres carriles: desde **ADR-014** son **cuatro**
+> (exprés, directo, normal, completo). El resto sigue vigente.
+
 ## Decisión vigente
 
 Cuatro reglas, salidas de construir y cerrar la primera unidad real de un workspace.

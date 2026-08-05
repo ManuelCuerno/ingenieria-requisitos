@@ -1,5 +1,9 @@
 # ADR-008 — Arranque documentado de roles operativos
 
+> **Nota (2026-08-05):** el plano de deploy se llama hoy `docs/conocimiento/plano-deploy.md`
+> — es el nombre que exigen `scripts/lint_deploy.py` y el bootstrap. Donde abajo dice
+> `plano-despliegue.md`, léase ese fichero.
+
 ## Decisión vigente
 
 La primera sesión de OBSERVABILITY entrevista a la persona y deja

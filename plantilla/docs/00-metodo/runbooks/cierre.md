@@ -188,4 +188,4 @@ casillas — lo marcado no se repite, lo no marcado no se da por hecho— en vez
 - Nada desplegable se cierra sin estar fusionado; documental no se fusiona y prototipo no se
   cierra por diseño.
 - Sin un resumen que el usuario entienda, no hay cierre: si para pedirle el OK hay que
-  explicarle el método, el mensaje está mal escrito (`AGENTS.md` §Cómo se le informa).
+  explicarle el método, el mensaje está mal escrito (`00-metodo/comunicacion.md`).

@@ -9,5 +9,6 @@ decisión en una frase (`ls docs/00-metodo/decisiones/`). Aquí no se repite, po
 escrita a mano se queda atrás en cuanto se publica un ADR nuevo — y un índice que miente
 cuesta más que no tenerlo.
 
-Un ADR **no se edita para cambiar de opinión**: se escribe otro que lo supere. Los ADR de TU
-proyecto viven aparte, en `docs/decisiones/`, con numeración propia desde `001`.
+Un ADR **no se edita para cambiar de opinión**: se escribe otro que lo supere. Las decisiones
+de TU proyecto viven aparte, en `docs/decisiones/`, con numeración propia desde `001` y
+citadas como `DP-NNN` (nunca `ADR-NNN`, que es siempre del método).

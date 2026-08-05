@@ -1,6 +1,7 @@
 # ADR-014 · El carril directo, y la puerta de flujos que la abre el delta
 
-**Fecha:** 2026-08-03 · **Estado:** aceptada
+**Fecha:** 2026-08-03 · **Estado:** aceptada · **Superada en parte por:** ADR-017 (la
+revisión del carril directo la hace SIEMPRE un agente fresco, no el padre)
 
 ## Contexto
 

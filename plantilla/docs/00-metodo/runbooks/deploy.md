@@ -61,7 +61,7 @@ anotado qué commit corre dónde, desde cuándo y quién lo puso.
   cuándo y quién lo desplegó (`migracion.md`, paso 6) — y se sube `actualizado:`.
 - **`ESTADO.md`**: una línea con la etapa y el commit desplegado. Es fichero compartido: se
   escribe dentro del ritual de cierre, indivisible (`00-metodo/README.md` §Los rituales).
-- **Al usuario se le cuenta aparte y en cristiano** (`AGENTS.md` §Cómo se le informa): qué
+- **Al usuario se le cuenta aparte y en cristiano** (`00-metodo/comunicacion.md`): qué
   corre ahora y dónde, qué falta, y qué necesitas de él. Las fichas y los planos son para el
   método, no para él: nunca se le suelta el vocabulario del método por el chat.
 

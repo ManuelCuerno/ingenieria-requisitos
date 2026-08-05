@@ -42,7 +42,7 @@ El método **no trae proveedor ni precio**: envejecen. Se abre una unidad tipo
 |---|---|---|---|
 | <A> | <una frase> | <precio, con fecha de consulta> | <él / el proveedor> |
 
-Se decide con él y **queda un ADR en `docs/decisiones/`**: qué se eligió, qué se descartó y
+Se decide con él y **queda una decisión `DP-NNN` en `docs/decisiones/`**: qué se eligió, qué se descartó y
 por qué. Es la decisión más cara de deshacer del proyecto.
 
 ## 4 · Lo que no puede hacer un agente (manos humanas)

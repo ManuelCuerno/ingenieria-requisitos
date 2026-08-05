@@ -39,6 +39,8 @@ expresamente que el padre firme— y dejaba el carril del día a día sin poder 
 | exprés · **directo** | **el padre**, en el worktree de la unidad, a la vista del usuario | agente fresco de solo lectura |
 | normal · completo | subagente constructor en su worktree | agente fresco de solo lectura |
 
+> **Nota (2026-08-05):** en exprés no hay revisor — su única puerta es el verde del área tocada (`runbooks/cierre.md`, `README.md` §Lo que cuesta cada carril); la fila de arriba aplica al carril directo.
+
 **El revisor vuelve a ser SIEMPRE fresco.** Esto no es una concesión: es más fuerte que lo que
 ADR-014 dejó. Al construir el padre, la revisión ya no puede recaer en él, así que la garantía
 "quien revisa no construyó" se cumple sola, sin excepciones que documentar.

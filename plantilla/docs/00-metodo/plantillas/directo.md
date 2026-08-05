@@ -67,7 +67,7 @@ no es un directo, es un refactor o una feature. Las reglas de diseño están en
 
 - [ ] 1. Test(s) que demuestren que esto NO existe aún, en ROJO · _Req: R1-R2_
 - [ ] 2. Implementar hasta que pasen, SIN tocarlos · _Depende de: 1_
-- [ ] 3. Suite completa + lint en verde; evidencia pegada en `hallazgos.md` · _Depende de: 2_
+- [ ] 3. Tests del **área tocada** (ADR-016) + lint en verde; evidencia pegada en `hallazgos.md` · _Depende de: 2_
 - [ ] 4. Commit, push y PR con `NNN-slug` en el título (sin `gh`: la rama commiteada) · _Depende de: 3_
 - [ ] 5. **PARAR.** Devuelve el control al padre con el enlace del PR y la evidencia. · _Depende de: 4_
 
@@ -84,5 +84,6 @@ no es un directo, es un refactor o una feature. Las reglas de diseño están en
 ## Definición de hecho
 
 1. Los R* en verde, con los tests intactos desde que se escribieron.
-2. Suite completa + lint en verde (línea base medida contra la principal EN ESE MOMENTO).
+2. Tests del **área tocada** (ADR-016) + lint en verde (línea base medida contra la
+   principal EN ESE MOMENTO).
 3. Evidencia pegada en `hallazgos.md` y PR abierto (o rama commiteada), y PARADA.
