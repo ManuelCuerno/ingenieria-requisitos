@@ -177,6 +177,12 @@ fallo crítico permite una segunda ronda. Preparar hoy problemas que aún no exi
 - `scripts/lease.py` — autoridad local para operaciones concurrentes (ADR-023): serializa la
   numeración, el despacho, los recursos declarados y Modo D con UUID de sesión, PID+inicio y
   fencing. Vive en `.runtime/`; otro host nunca se declara libre por su ausencia local.
+- `scripts/control_plane.py` — guard anti-producción de los tests (un DSN de producción no se
+  conecta), namespacing de puertos/DB/tags por repo+unidad (`:latest` rechazado) y la redacción
+  de credenciales que reutilizan los demás scripts (ADR-024). `scripts/caja_negra.py` — la caja
+  negra estructurada: `registrar`, `listar`, `validar` y `enviar` (feedback voluntario y
+  redactado al autor del método). `repo_config.py` y `workspace_paths.py` son sus cimientos
+  compartidos de rutas y configuración.
 - `scripts/doctor.py` — **qué hay de verdad en esta máquina** (Python, git y su identidad,
   `gh`, Docker, Node) y qué implica cada ausencia. Lo corre `setup.py` y la fase 4: el ROADMAP
   no fija una herramienta que no esté aquí en verde. Informa, nunca bloquea.

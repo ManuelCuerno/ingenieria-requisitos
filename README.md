@@ -55,6 +55,9 @@ completa:
 
 - `RUNBOOK.md`: el método completo que sigue tu IA (incluido el Modo D, que
   reparte las mejoras del método a los proyectos ya creados).
+- `CHANGELOG.md`: qué trae cada versión del método, contado en cristiano.
+  Tu proyecto sabe su versión (está en su `METODO.json`) y el Modo D te dice
+  el salto antes de aplicarlo.
 - `visor/`: la web local y las herramientas. No se tocan.
 - `plantilla/`: el molde del proyecto de trabajo que monta el bootstrap
   (el método de desarrollo por fases). No se toca; su README lo explica.

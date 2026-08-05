@@ -49,7 +49,10 @@ proceso de agentes. El proceso lo gobierna siempre este meta-repo.
 
 ## Caja negra
 
-Lo inesperado se registra con `scripts/caja_negra.py registrar`. El JSONL guarda contexto de
-ejecución y referencias de evidencia, no conversaciones completas. El análisis posterior lo
-hace un LLM leyendo episodios completos y el código relacionado; el registro estructurado solo
-evita perder el contexto o confundir repositorios.
+Lo inesperado se registra con `scripts/caja_negra.py registrar` (con `--severidad` cuando no
+sea una nota). El JSONL guarda contexto de ejecución y referencias de evidencia, no
+conversaciones completas. `listar` lo repasa y `validar` comprueba que sigue bien formado.
+El análisis posterior lo hace un LLM leyendo episodios completos y el código relacionado; el
+registro estructurado solo evita perder el contexto o confundir repositorios. Si el usuario
+quiere, `enviar` comparte los incidentes —redactados y previa confirmación— con el autor del
+método para mejorarlo: es siempre voluntario.
