@@ -1,6 +1,8 @@
+import ast
 import importlib.util
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -1123,6 +1125,60 @@ class ContratoCITest(unittest.TestCase):
                 f"No activó E2E para {ubicacion}:\n{resultado.stdout}{resultado.stderr}",
             )
 
+    def escribir_manifiesto_metodo(self, workspace):
+        base = workspace / "docs" / "00-metodo"
+        archivos = sorted(
+            str(ruta.relative_to(workspace))
+            for ruta in base.rglob("*")
+            if ruta.is_file()
+            and "__pycache__" not in ruta.parts
+            and ruta.name != ".DS_Store"
+        )
+        (workspace / "METODO.json").write_text(
+            json.dumps({"formato": 1, "huella": "0" * 64, "archivos": archivos}),
+            encoding="utf-8",
+        )
+        return archivos
+
+    def ejecutar_lint_metodo(self, workspace):
+        return subprocess.run(
+            [sys.executable, str(workspace / "docs/00-metodo/scripts/lint_metodo.py")],
+            cwd=workspace,
+            text=True,
+            capture_output=True,
+            env=self.git_env,
+        )
+
+    def test_lint_metodo_defiende_su_propio_arsenal(self):
+        # Auditoría 2026-08-03, hallazgo 3: se podía borrar runbooks y ADRs y VACIAR
+        # unidad.py con 0 FAIL, porque el linter validaba todo menos docs/00-metodo/.
+        # La lista de ficheros del método viaja en METODO.json; el linter la recorre.
+        workspace = self.crear_workspace_metodo()
+        self.escribir_manifiesto_metodo(workspace)
+
+        integro = self.ejecutar_lint_metodo(workspace)
+        self.assertIn("arsenal del método completo", integro.stdout)
+
+        (workspace / "docs/00-metodo/runbooks/cierre.md").unlink()
+        (workspace / "docs/00-metodo/scripts/unidad.py").write_text("", encoding="utf-8")
+        for adr in sorted((workspace / "docs/00-metodo/decisiones").glob("00[1-8]-*.md")):
+            adr.unlink()
+
+        desarmado = self.ejecutar_lint_metodo(workspace)
+
+        self.assertEqual(desarmado.returncode, 1)
+        self.assertIn("arsenal del método incompleto", desarmado.stdout)
+        self.assertIn("runbooks/cierre.md", desarmado.stdout)
+        self.assertIn("scripts/unidad.py", desarmado.stdout)
+
+    def test_lint_metodo_avisa_si_nadie_le_dio_manifiesto(self):
+        workspace = self.crear_workspace_metodo()
+
+        resultado = self.ejecutar_lint_metodo(workspace)
+
+        self.assertIn("METODO.json", resultado.stdout)
+        self.assertNotIn("arsenal del método completo", resultado.stdout)
+
     def test_deploy_rechaza_controles_ausentes(self):
         workspace = self.crear_workspace_deploy(contrato=False)
         resultado = self.ejecutar_lint_deploy(workspace)
@@ -1149,6 +1205,50 @@ class ContratoCITest(unittest.TestCase):
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
         self.assertIn("suite completa: verde", resultado.stdout)
         self.assertIn("seguridad: verde", resultado.stdout)
+
+    def seccion_3bis_de_la_plantilla(self):
+        plantilla = RAIZ / "plantilla/docs/00-metodo/plantillas/plano-operativo.md"
+        seccion = re.search(
+            r"^## 3bis[^\n]*\n(.*?)(?=^## |\Z)",
+            plantilla.read_text(encoding="utf-8"),
+            re.M | re.S,
+        )
+        self.assertIsNotNone(seccion, "plano-operativo.md ya no tiene la ficha §3bis")
+        return seccion.group(1)
+
+    def test_gate_deploy_exige_exactamente_las_casillas_de_la_plantilla(self):
+        # Auditoría 2026-08-03, hallazgo 5: el gate pedía secciones ('## Backups', …) que
+        # ninguna plantilla producía — un rojo IMPOSIBLE de quitar. La fuente única ahora es
+        # la ficha §3bis de plano-operativo.md; si plantilla y gate divergen, falla esto y no
+        # el usuario delante de un FAIL sin salida.
+        casillas = None
+        for nodo in ast.walk(ast.parse(LINT_DEPLOY.read_text(encoding="utf-8"))):
+            if isinstance(nodo, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "CASILLAS" for t in nodo.targets
+            ):
+                casillas = [ast.literal_eval(clave) for clave in nodo.value.keys]
+        self.assertIsNotNone(casillas, "lint_deploy.py ya no define CASILLAS")
+
+        claves = re.findall(r"^\|\s*`(\w+)`\s*\|", self.seccion_3bis_de_la_plantilla(), re.M)
+
+        self.assertEqual(sorted(claves), sorted(casillas))
+        self.assertEqual(len(claves), len(set(claves)))
+
+    def test_plantilla_sin_rellenar_cierra_el_gate_pero_con_instrucciones_cumplibles(self):
+        # La otra mitad del hallazgo 5: copiar la plantilla tal cual NO abre el gate (los
+        # menús sin elegir y los huecos `<...>` no son decisiones), pero el FAIL nombra las
+        # casillas que la plantilla sí tiene, no secciones de un formato muerto.
+        workspace = self.crear_workspace_deploy()
+        (workspace / "docs/conocimiento/plano-deploy.md").write_text(
+            "# Plano deploy\n" + self.seccion_3bis_de_la_plantilla(), encoding="utf-8"
+        )
+
+        resultado = self.ejecutar_lint_deploy(workspace)
+
+        self.assertEqual(resultado.returncode, 1)
+        self.assertIn("sin decidir", resultado.stdout)
+        for clave in ("etapa", "camino", "vuelta_atras", "datos", "vigilancia"):
+            self.assertIn(clave, resultado.stdout)
 
 
 if __name__ == "__main__":

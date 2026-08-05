@@ -604,6 +604,48 @@ def revisar_cola_peticiones():
 
 print("== Linter del método ==")
 
+# --- 0. El arsenal del método: los guardianes existen y no están vacíos ---
+# Se demostró (auditoría adversaria 2026-08-03, hallazgo 3) que se podían borrar los
+# runbooks y los ADRs y hasta VACIAR unidad.py con 0 FAIL: este linter validaba todo el
+# workspace MENOS docs/00-metodo/, así que un agente «ordenando» podía desactivar a todos
+# los demás guardianes en silencio. La lista de ficheros del método viaja en METODO.json
+# (la escribe el bootstrap y la reescribe el Modo D); aquí solo se comprueba que cada uno
+# existe y tiene contenido.
+metodo_json = RAIZ / "METODO.json"
+if not metodo_json.is_file():
+    warn("METODO.json no existe: no puedo comprobar que el arsenal del método esté completo "
+         "(lo escribe el bootstrap; recupéralo con `git checkout -- METODO.json`)")
+else:
+    try:
+        datos_metodo = json.loads(metodo_json.read_text(encoding="utf-8"))
+        if not isinstance(datos_metodo, dict):
+            raise ValueError("no es un objeto JSON")
+    except (OSError, ValueError) as exc:
+        fail(f"METODO.json ilegible ({exc}): sin él no se puede verificar el arsenal del método")
+        datos_metodo = None
+    if datos_metodo is not None:
+        archivos_metodo = datos_metodo.get("archivos") or []
+        if not archivos_metodo:
+            warn("METODO.json sin la lista `archivos`: el arsenal del método queda sin "
+                 "vigilar hasta repartir el método actualizado (Modo D de la herramienta)")
+        else:
+            rotos = []
+            for relativo in archivos_metodo:
+                ruta = RAIZ / relativo
+                if not ruta.is_file():
+                    rotos.append(f"{relativo} (no existe)")
+                elif not ruta.read_text(encoding="utf-8", errors="replace").strip():
+                    rotos.append(f"{relativo} (vacío)")
+            if rotos:
+                extra = f" … y {len(rotos) - 12} más" if len(rotos) > 12 else ""
+                fail("arsenal del método incompleto — sin estos guardianes el resto del "
+                     "linter no protege nada: " + "; ".join(rotos[:12]) + extra +
+                     ". Recupéralos con `git checkout -- docs/00-metodo METODO.json` o con "
+                     "el Modo D de la herramienta")
+            else:
+                ok(f"arsenal del método completo ({len(archivos_metodo)} ficheros presentes "
+                   f"y con contenido)")
+
 # --- 1. Raíz: ficheros y tope de tamaño del router ---
 agents = RAIZ / "AGENTS.md"
 if not agents.exists():

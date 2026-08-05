@@ -1,3 +1,4 @@
+import importlib
 import json
 import datetime
 import re
@@ -1175,6 +1176,32 @@ class LintPeticionesTest(unittest.TestCase):
         self.assertEqual(resultado.returncode, 1)
         self.assertIn("sin petición", resultado.stdout.lower())
 
+    def test_grafias_distintas_del_mismo_fichero_chocan_en_paralelo(self):
+        # Auditoría 2026-08-03, hallazgo 2: `api/x.py` y `./API/x.py` pasaban por disjuntos.
+        for nombre, grafia in (("001-puerta", "api/x.py"), ("002-choque", "./API/x.py")):
+            carpeta = self.ws / "docs/05-trabajo" / nombre
+            carpeta.mkdir()
+            (carpeta / "especificacion.md").write_text(
+                "---\n"
+                f"unidad: {nombre}\n"
+                "tipo: feature\n"
+                "carril: normal\n"
+                "estado: en_obra\n"
+                "aprobado: 2026-08-04\n"
+                "actividad: REC-1\n"
+                f"ficheros: [{grafia}]\n"
+                "peticiones: []\n"
+                "actualizado: 2026-08-04\n"
+                "---\n\n# Contrato\n",
+                encoding="utf-8",
+            )
+
+        resultado = self.ejecutar()
+
+        self.assertEqual(resultado.returncode, 1)
+        self.assertIn("comparten ficheros declarados", resultado.stdout)
+        self.assertIn("api/x.py", resultado.stdout)
+
     def test_referencia_inexistente_o_revision_obsoleta_falla(self):
         pid = self.peticion(revision=2)
         self.unidad(peticiones=f"{pid}@1")
@@ -1608,6 +1635,112 @@ class ContratoTextualPeticionesTest(unittest.TestCase):
                 if "unidad.py nueva" in linea and "--desde" not in linea:
                     infracciones.append(f"{ruta.name}:{numero}")
         self.assertEqual(infracciones, [], infracciones)
+
+
+def cargar_modulo_unidad():
+    """Importa unidad.py con sus módulos hermanos resolubles. Una vez por proceso."""
+    if "unidad" in sys.modules:
+        return sys.modules["unidad"]
+    sys.path.insert(0, str(SCRIPTS))
+    try:
+        return importlib.import_module("unidad")
+    finally:
+        sys.path.remove(str(SCRIPTS))
+
+
+class SalidaDelTrabajoProbadaTest(unittest.TestCase):
+    """Regresión de la auditoría adversaria 2026-08-03, hallazgos 1 y 2.
+
+    Hallazgo 1: `rama_mergeada` devolvía True cuando la rama YA NO EXISTÍA («cierre a
+    medias: sigo con lo que falta»), así que un `git branch -D` sin fusionar se archivaba
+    como `mergeada` — pérdida de trabajo con acta de entrega. Hallazgo 2: la puerta de
+    paralelismo comparaba cadenas sin normalizar, y `api/x.py`, `./api/x.py` y `API/x.py`
+    pasaban por tres ficheros disjuntos.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="salida-trabajo-")
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = Path(self.tmp.name) / "main"
+        self.repo.mkdir()
+        self.git("init", "-b", "main")
+        self.git("config", "user.name", "Test")
+        self.git("config", "user.email", "test@example.com")
+        (self.repo / "base.txt").write_text("base\n", encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-m", "base")
+        self.unidad = cargar_modulo_unidad()
+
+    def git(self, *args):
+        return subprocess.run(
+            ["git", *args], cwd=self.repo, check=True, capture_output=True, text=True
+        ).stdout.strip()
+
+    def commit_en_rama(self, rama="001-perdida"):
+        self.git("checkout", "-b", rama)
+        (self.repo / "trabajo.txt").write_text("trabajo\n", encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-m", "Edicion de paquetes (R1-R3)")
+        self.git("checkout", "main")
+        return rama
+
+    def test_rama_borrada_sin_fusionar_no_cuenta_como_mergeada(self):
+        rama = self.commit_en_rama()
+        self.git("branch", "-D", rama)
+
+        mergeada, motivo, fuerte, sha = self.unidad.rama_mergeada(self.repo, rama, "main")
+
+        self.assertFalse(mergeada, motivo)
+        self.assertFalse(fuerte)
+        self.assertIn("NO prueba", motivo)
+
+    def test_rama_viva_sin_fusionar_tampoco(self):
+        rama = self.commit_en_rama()
+
+        mergeada, motivo, fuerte, _ = self.unidad.rama_mergeada(self.repo, rama, "main")
+
+        self.assertFalse(mergeada, motivo)
+        self.assertIn("NO está fusionada", motivo)
+
+    def test_rama_fusionada_da_prueba_fuerte(self):
+        rama = self.commit_en_rama()
+        self.git("merge", "--ff-only", rama)
+
+        mergeada, motivo, fuerte, sha = self.unidad.rama_mergeada(self.repo, rama, "main")
+
+        self.assertTrue(mergeada, motivo)
+        self.assertTrue(fuerte)
+        self.assertEqual(sha, self.git("rev-parse", rama))
+
+    def test_fusion_anotada_reanuda_un_cierre_sin_rama(self):
+        rama = self.commit_en_rama()
+        self.git("merge", "--ff-only", rama)
+        sha = self.git("rev-parse", "main")
+        self.git("branch", "-d", rama)
+
+        mergeada, motivo, fuerte, _ = self.unidad.rama_mergeada(
+            self.repo, rama, "main", fusion_declarada=sha
+        )
+
+        self.assertTrue(mergeada, motivo)
+        self.assertTrue(fuerte)
+
+    def test_squash_borrada_es_prueba_debil_y_lo_dice(self):
+        rama = self.commit_en_rama("002-squash")
+        self.git("merge", "--squash", rama)
+        self.git("commit", "-m", f"{rama}: edición de paquetes")
+        self.git("branch", "-D", rama)
+
+        mergeada, motivo, fuerte, _ = self.unidad.rama_mergeada(self.repo, rama, "main")
+
+        self.assertTrue(mergeada, motivo)
+        self.assertFalse(fuerte)
+        self.assertIn("INDIRECTA", motivo)
+
+    def test_ficheros_de_unifica_grafias_del_mismo_fichero(self):
+        fm = {"ficheros": "[api/x.py, ./api/x.py, API/x.py, api\\x.py]"}
+
+        self.assertEqual(self.unidad.ficheros_de(fm), {"api/x.py"})
 
 
 if __name__ == "__main__":

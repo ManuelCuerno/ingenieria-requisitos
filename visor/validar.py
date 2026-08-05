@@ -62,6 +62,62 @@ def _es_tipo(valor, tipo):
     return tipo in tipos and tipos[tipo](valor)
 
 
+# Lo que _errores_esquema implementa DE VERDAD. Si esquema.json usara cualquier otra keyword
+# de validación (if/then, patternProperties, allOf, maxLength, …), este validador la ignoraría
+# EN SILENCIO y unos planos inválidos pasarían por válidos. Antes de validar nada se recorre
+# el esquema entero y cualquier keyword fuera de esta lista es un error ruidoso.
+KEYWORDS_SOPORTADAS = frozenset((
+    "$ref", "anyOf", "oneOf", "type", "const", "enum", "minLength", "pattern",
+    "minItems", "items", "required", "properties", "additionalProperties",
+))
+# Anotaciones y estructura: por definición no validan nada, así que ignorarlas es correcto.
+KEYWORDS_ESTRUCTURALES = frozenset((
+    "$schema", "$id", "$comment", "title", "description", "examples", "default",
+    "definitions",
+))
+
+
+def _keywords_no_soportadas(regla, donde="#"):
+    """Keywords de esquema.json que este validador ignoraría en silencio.
+
+    Distingue posición de KEYWORD de posición de NOMBRE: las claves dentro de `properties`
+    o `definitions` son nombres de campo (un campo puede llamarse `if` sin ser la keyword),
+    así que ahí no se juzga la clave, solo se desciende a su subesquema. También caza las
+    FORMAS no implementadas de keywords soportadas: `items` como lista (tupla), `type` como
+    lista y `additionalProperties` con un subesquema en vez de un booleano.
+    """
+    if not isinstance(regla, dict):
+        return ["%s: se esperaba un objeto-esquema, no %s" % (donde, type(regla).__name__)]
+    hallazgos = []
+    for clave, valor in regla.items():
+        ruta = "%s/%s" % (donde, clave)
+        if clave in ("properties", "definitions"):
+            if isinstance(valor, dict):
+                for nombre, sub in valor.items():
+                    hallazgos += _keywords_no_soportadas(sub, "%s/%s" % (ruta, nombre))
+        elif clave in ("anyOf", "oneOf"):
+            if isinstance(valor, list):
+                for i, sub in enumerate(valor):
+                    hallazgos += _keywords_no_soportadas(sub, "%s[%d]" % (ruta, i))
+        elif clave == "items":
+            if isinstance(valor, list):
+                hallazgos.append("%s: items en forma de lista (tupla) no está implementado"
+                                 % ruta)
+            else:
+                hallazgos += _keywords_no_soportadas(valor, ruta)
+        elif clave == "additionalProperties":
+            if not isinstance(valor, bool):
+                hallazgos.append("%s: additionalProperties solo se implementa como booleano"
+                                 % ruta)
+        elif clave == "type":
+            if not isinstance(valor, str):
+                hallazgos.append("%s: type como lista no está implementado" % ruta)
+        elif clave not in KEYWORDS_SOPORTADAS and clave not in KEYWORDS_ESTRUCTURALES:
+            hallazgos.append("%s: keyword de validación no soportada por este validador "
+                             "(se ignoraría en silencio)" % ruta)
+    return hallazgos
+
+
 def _errores_esquema(valor, regla, raiz, donde="$" ):
     """Subconjunto Draft 7 usado por nuestro esquema, sin dependencias externas."""
     if "$ref" in regla:
@@ -115,6 +171,12 @@ def validar_esquema(d):
         esquema = json.loads((BASE / "esquema.json").read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         return err("esquema.json", "no se puede leer: %s" % exc)
+    sospechosas = _keywords_no_soportadas(esquema)
+    if sospechosas:
+        for hallazgo in sospechosas:
+            err("esquema.json", hallazgo)
+        return err("esquema.json", "NO se validó nada contra el esquema: primero quita o "
+                   "implementa las keywords de arriba (validar.py, _errores_esquema)")
     for fallo in _errores_esquema(d, esquema, esquema):
         err("esquema", fallo)
 
