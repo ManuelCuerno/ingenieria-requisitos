@@ -27,7 +27,7 @@ class PeticionesTest(unittest.TestCase):
         self.script = scripts / "peticion.py"
         if PETICION.exists():
             shutil.copy2(PETICION, self.script)
-            for nombre in ("repo_config.py", "workspace_paths.py"):
+            for nombre in ("control_plane.py", "repo_config.py", "workspace_paths.py"):
                 shutil.copy2(SCRIPTS / nombre, scripts / nombre)
         plantillas = self.ws / "docs/00-metodo/plantillas"
         plantillas.mkdir(parents=True)

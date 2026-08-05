@@ -27,6 +27,7 @@ class ControlPlaneE2ETest(unittest.TestCase):
         scripts.mkdir(parents=True)
         self.assertTrue(LAUNCHER.is_file(), "falta el launcher canónico ejecucion.py")
         shutil.copy2(LAUNCHER, scripts / "ejecucion.py")
+        shutil.copy2(LAUNCHER.with_name("control_plane.py"), scripts / "control_plane.py")
         shutil.copy2(LAUNCHER.with_name("lease.py"), scripts / "lease.py")
         shutil.copy2(WORKSPACE_PATHS, scripts / "workspace_paths.py")
         self.launcher = scripts / "ejecucion.py"
