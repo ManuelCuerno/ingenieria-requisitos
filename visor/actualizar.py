@@ -104,6 +104,12 @@ def rutas_sucias(workspace):
     return sorted(
         ruta for ruta in rutas
         if not ruta.startswith((".runtime/", "main/", "worktrees/"))
+        # Bytecode de Python: aparece en cuanto el usuario ejecuta cualquier script del
+        # método y no es trabajo de nadie. Los .gitignore nuevos ya lo ignoran, pero este
+        # chequeo corre ANTES de repartir ese .gitignore: sin filtrarlo aquí, un workspace
+        # viejo con __pycache__/ quedaba bloqueado para siempre ("árbol sucio").
+        and "__pycache__" not in ruta.split("/")
+        and not ruta.endswith((".pyc", ".pyo"))
     )
 
 
@@ -296,6 +302,17 @@ def contenido_esperado(workspace):
             avisos.append("no pude leer el título en la primera línea de AGENTS.md "
                           "(se espera '# AGENTS.md — <título> (meta-repo)'): lo dejo sin "
                           "actualizar para no borrarte el nombre del proyecto")
+    # Carpetas del árbol congelado ausentes (workspaces anteriores a ellas): se repone su
+    # ESQUELETO vacío, tal como lo crea el bootstrap. No es tocar contenido — sin la
+    # carpeta, el linter no puede volver a verde y Modo D tiene prohibido inventar fichas.
+    for carpeta, ficheros in sorted(bootstrap.esqueleto_congelado().items()):
+        if (workspace / carpeta).is_dir():
+            continue
+        for nombre, texto in ficheros.items():
+            esperado[f"{carpeta}/{nombre}"] = texto
+        avisos.append(
+            f"falta {carpeta}/ (árbol congelado): se repone su esqueleto vacío, sin contenido"
+        )
     if era_sin_inbox:
         relativo = "docs/05-trabajo/peticiones/LEGACY.json"
         esperado[relativo] = json.dumps(
@@ -339,8 +356,32 @@ def diferencias(workspace, esperado):
     return cambios, retirados, sobrantes
 
 
+def version_workspace(workspace):
+    """La versión del método que declara el METODO.json del workspace.
+
+    Los workspaces anteriores al 1.1.0 no llevan el campo `version` (ni a veces el
+    fichero): se responde "sin versión" y no se falla, que para eso está el Modo D.
+    """
+    try:
+        datos = json.loads((Path(workspace) / "METODO.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return "sin versión"
+    version = datos.get("version") if isinstance(datos, dict) else None
+    if isinstance(version, str) and version.strip():
+        return version.strip()
+    return "sin versión"
+
+
+def linea_version(workspace):
+    actual, nueva = version_workspace(workspace), bootstrap.version_metodo()
+    if actual == nueva:
+        return f"método {nueva} (al día)"
+    return f"método {actual} → {nueva}"
+
+
 def informe(ruta, titulo, cambios, retirados, sobrantes, avisos):
     print(f"\n=== {titulo} ===\n    {ruta}")
+    print(f"    {linea_version(ruta)}")
     if cambios:
         print(f"    {len(cambios)} fichero(s) del método cambian:")
         for f in cambios:
@@ -738,7 +779,9 @@ def preparar_publicado(workspace, cambios, retirados, esperado, snapshot, sha, o
             publicado[relativo] = (esperado[relativo].encode("utf-8"), modo)
         elif relativo == "METODO.json":
             metodo = json.dumps(
-                {"formato": 1, "huella": bootstrap.huella_plantilla(), "actualizado": HOY},
+                {"formato": 1, "huella": bootstrap.huella_plantilla(), "actualizado": HOY,
+                 "version": bootstrap.version_metodo(),
+                 "archivos": bootstrap.manifiesto_metodo()},
                 ensure_ascii=False, indent=2, sort_keys=True,
             ) + "\n"
             publicado[relativo] = (metodo.encode("utf-8"), 0o644)
@@ -999,7 +1042,8 @@ def main():
         print("No hay proyectos registrados. Regístralos con "
               "`python3 visor/proyectos.py registrar RUTA`.")
         return 0
-    print(f"Método de esta herramienta: huella {bootstrap.huella_plantilla()[:12]}…")
+    print(f"Método de esta herramienta: versión {bootstrap.version_metodo()} "
+          f"· huella {bootstrap.huella_plantilla()[:12]}…")
     salida, pendientes = 0, 0
     for entrada in lista:
         ruta = Path(entrada["ruta"])

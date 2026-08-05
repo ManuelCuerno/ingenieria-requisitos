@@ -142,6 +142,36 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         lint = self.ejecutar(destino / "docs/00-metodo/scripts/lint_metodo.py")
         self.assertEqual(lint.returncode, 0, lint.stdout + lint.stderr)
 
+    def test_workspace_virgen_arranca_sin_semaforos_rojos_permanentes(self):
+        # Familia 004/018: un linter que FALLA sobre un workspace recién nacido, cuando la
+        # condición que vigila no aplica todavía, enseña a convivir con el rojo. Los dos
+        # linters de arranque/merge deben salir en verde. El gate de deploy es aparte: solo
+        # se corre al desplegar, y su único rojo permitido en un workspace virgen es el del
+        # plano de deploy sin decidir — deliberado (bootstrap, PLANOS_OPERATIVOS) y con
+        # instrucciones que SÍ lo quitan (runbooks/primer-despliegue.md). Nada estructural.
+        destino = self.base / "virgen-agents"
+        resultado = self.ejecutar(
+            BOOTSTRAP, "--planos", str(self.planos_minimos()), "--destino", str(destino)
+        )
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+
+        lint = self.ejecutar(destino / "docs/00-metodo/scripts/lint_metodo.py")
+        self.assertEqual(lint.returncode, 0, lint.stdout + lint.stderr)
+        self.assertIn("arsenal del método completo", lint.stdout)
+
+        ci = self.ejecutar(
+            destino / "docs/00-metodo/scripts/lint_ci.py", "--repo", str(destino / "main")
+        )
+        self.assertEqual(ci.returncode, 0, ci.stdout + ci.stderr)
+
+        deploy = self.ejecutar(destino / "docs/00-metodo/scripts/lint_deploy.py")
+        fails = [
+            linea for linea in deploy.stdout.splitlines()
+            if linea.strip().startswith("FAIL")
+        ]
+        self.assertEqual(len(fails), 1, deploy.stdout)
+        self.assertIn("plano-deploy.md sin decidir", fails[0])
+
     def test_setup_y_lint_rechazan_ruta_local_con_escape_o_symlink(self):
         destino = self.base / "rutas-agents"
         resultado = self.ejecutar(

@@ -115,8 +115,9 @@ DECISIONES = (
     "024-control-plane-de-seguridad-y-evidencia-causal.md",
 )
 METODO_RAIZ = (
-    "README.md", "roles.md", "comunicacion.md", "auditoria-calidad.md", "auditoria-metodo.md",
-    "auditoria-seguridad.md", "seguridad-por-stack.md", "sandbox.md", "proceso-nativo.md",
+    "README.md", "VERSION", "roles.md", "comunicacion.md", "auditoria-calidad.md",
+    "auditoria-metodo.md", "auditoria-seguridad.md", "seguridad-por-stack.md", "sandbox.md",
+    "proceso-nativo.md",
 )
 ARCHIVOS_METODO = tuple(
     [*METODO_RAIZ]
@@ -130,6 +131,47 @@ ARCHIVOS_REQUISITOS = (
     "compilar.py", "finalizar.py", "requisitos.py", "revision.py", "plantilla.html",
     "esquema.json", "requirements-dev.txt",
 )
+
+
+def version_metodo():
+    """Versión semver del método: la declara `plantilla/docs/00-metodo/VERSION`.
+
+    Viaja al workspace en METODO.json (campo `version`, junto a formato y huella) para que
+    actualizar.py pueda decir "método x.y.z → a.b.c" en vez de comparar solo huellas.
+    """
+    return (PLANTILLA / "docs" / "00-metodo" / "VERSION").read_text(encoding="utf-8").strip()
+
+
+def esqueleto_congelado():
+    """Esqueleto vacío de las carpetas del árbol congelado que nacen SIN contenido.
+
+    {carpeta: {fichero: contenido}}. Fuente única compartida: el bootstrap lo usa al montar
+    el workspace, y actualizar.py (Modo D) repone la carpeta entera cuando falta — un
+    workspace anterior a docs/bugs/ no podía volver a verde porque Modo D tiene prohibido
+    tocar bugs/, pero reponer el ESQUELETO vacío no es tocar contenido.
+    """
+    return {
+        "docs/03-investigacion": {".gitkeep": ""},
+        # 04-planificacion nace VACÍA, igual que 03-investigacion: el ROADMAP lo escribe la
+        # fase 4 desde `plantillas/roadmap.md` (estructura fija). Un ROADMAP de relleno haría
+        # fallar los tests e2e del método y mentiría sobre el estado del proyecto.
+        "docs/04-planificacion": {".gitkeep": ""},
+        "docs/decisiones": {".gitkeep": ""},
+        # docs/bugs/: parte del árbol congelado que el linter EXIGE (ADR-006). Un bug es un
+        # fichero vivo NNN-slug.md aquí, y su índice nace vacío.
+        "docs/bugs": {".gitkeep": "", "INDICE.md": generar_indice_bugs()},
+        "docs/05-trabajo/archivo": {".gitkeep": ""},
+    }
+
+
+def manifiesto_metodo():
+    """La lista de ficheros del método tal como viaja en METODO.json.
+
+    Es lo que lint_metodo.py recorre en cada arranque para que borrar o vaciar un guardián
+    (runbooks, ADRs, los propios scripts) no pase jamás con 0 FAIL: sin esta lista dentro
+    del workspace, el linter no tenía forma de saber qué debía existir.
+    """
+    return ["docs/00-metodo/" + relativo for relativo in ARCHIVOS_METODO]
 
 
 def morir(msg):
@@ -762,27 +804,18 @@ def main():
     shutil.copyfile(constitucion, docs / "01-constitucion" / "manifiesto.md")
     shutil.copyfile(PLANTILLA / "bias" / fichero_bias,
                     docs / "01-constitucion" / "bias.md")
-    for vacio in ("03-investigacion", "decisiones"):
-        (docs / vacio).mkdir()
-        (docs / vacio / ".gitkeep").write_text("")
     # conocimiento/ ya no nace del todo vacía: los dos planos operativos nacen como el hueco
     # que explica quién lo llena y con qué preguntas (ver PLANOS_OPERATIVOS).
     (docs / "conocimiento").mkdir()
     for rol in PLANOS_OPERATIVOS:
         (docs / "conocimiento" / f"plano-{rol}.md").write_text(
             generar_plano_pendiente(rol), encoding="utf-8")
-    # docs/bugs/: parte del árbol congelado que el linter EXIGE (ADR-006). Un bug es un
-    # fichero vivo NNN-slug.md aquí, y su índice nace vacío.
-    (docs / "bugs").mkdir()
-    (docs / "bugs" / ".gitkeep").write_text("")
-    (docs / "bugs" / "INDICE.md").write_text(generar_indice_bugs(), encoding="utf-8")
-    # 04-planificacion nace VACÍA, igual que 03-investigacion: el ROADMAP lo escribe la fase 4
-    # desde `plantillas/roadmap.md` (estructura fija). Un ROADMAP de relleno haría fallar los
-    # tests e2e del método —que exigen sus 4 secciones— y mentiría sobre el estado del proyecto.
-    (docs / "04-planificacion").mkdir()
-    (docs / "04-planificacion" / ".gitkeep").write_text("")
-    (docs / "05-trabajo" / "archivo").mkdir(parents=True)
-    (docs / "05-trabajo" / "archivo" / ".gitkeep").write_text("")
+    # Las carpetas del árbol congelado que nacen vacías, cada una con su esqueleto (fuente
+    # única compartida con actualizar.py; el porqué de cada una, en esqueleto_congelado).
+    for carpeta, ficheros in esqueleto_congelado().items():
+        (destino / carpeta).mkdir(parents=True, exist_ok=True)
+        for nombre, contenido in sorted(ficheros.items()):
+            (destino / carpeta / nombre).write_text(contenido, encoding="utf-8")
     # Workspaces nuevos nacen estrictos: el almacén existe, pero no LEGACY.json.
     (docs / "05-trabajo" / "peticiones").mkdir()
 
@@ -848,7 +881,8 @@ def main():
     # La guía del humano (sin tecnicismos) y la CI del método
     (destino / "GUIA.md").write_text(generar_guia(titulo), encoding="utf-8")
     (destino / "METODO.json").write_text(
-        json.dumps({"formato": 1, "huella": huella_plantilla()},
+        json.dumps({"formato": 1, "huella": huella_plantilla(), "version": version_metodo(),
+                    "archivos": manifiesto_metodo()},
                    ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )

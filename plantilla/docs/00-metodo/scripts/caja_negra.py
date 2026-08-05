@@ -3,11 +3,18 @@
 
 El JSONL es material de entrada para una revisión semántica posterior. Este comando captura
 contexto; no clasifica causas ni pretende reemplazar el análisis de un LLM.
+
+Subcomandos: `registrar` (añade un episodio), `listar` (tabla compacta), `validar` (revisa
+el JSONL) y `enviar` (canal VOLUNTARIO: comparte los incidentes ya redactados con el autor
+de la herramienta, enseñando antes exactamente lo que viaja).
 """
 import argparse
 import datetime
 import json
 import os
+import platform
+import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -15,6 +22,29 @@ import uuid
 from pathlib import Path
 
 import control_plane
+
+SEVERIDADES = ("P0", "P1", "P2", "nota")
+# Campos sin los cuales un incidente no cuenta nada. Las líneas v1 no llevan severidad ni
+# version_metodo y siguen siendo válidas: solo se exige lo que siempre existió.
+OBLIGATORIOS = ("schema", "id", "timestamp", "fase", "sintoma", "esperado", "actual")
+
+DESTINO_ISSUES = "nategentile/ingenieria-requisitos"
+LIMITE_ENVIO = 60 * 1024  # el cuerpo de un issue de GitHub no admite mucho más
+
+# Rutas con el nombre del usuario dentro: en el envío se colapsan a `~`.
+RE_HOME = re.compile(r"/(?:Users|home)/[^/\s\"'\\]+")
+
+# Formas de credencial reconocibles que la redacción genérica no sabe limpiar (no van
+# precedidas de `clave=`): si una sobrevive a la redacción, NO se envía nada.
+CREDENCIALES_RESIDUALES = (
+    ("clave privada PEM", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    ("clave de acceso AWS", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("token de GitHub", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
+    ("token de Slack", re.compile(r"\bxox[abprs]-[0-9A-Za-z-]{10,}\b")),
+    ("token JWT", re.compile(
+        r"\beyJ[0-9A-Za-z_+/=-]{8,}\.[0-9A-Za-z_+/=-]{8,}\.[0-9A-Za-z_+/=-]{8,}\b"
+    )),
+)
 
 
 def morir(mensaje):
@@ -76,10 +106,48 @@ def detectar_sesion():
     return "desconocida"
 
 
-def registrar(args):
+def version_metodo(repo):
+    """La versión del método del repo donde se registra, o "desconocida"."""
+    try:
+        version = (Path(repo) / "docs/00-metodo/VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        return "desconocida"
+    return version or "desconocida"
+
+
+def repo_valido(args):
     repo = Path(args.repo).resolve()
     if not repo.is_dir():
         morir(f"el repo no existe: {repo}")
+    return repo
+
+
+def cargar_incidentes(repo, *, tolerar_malas):
+    """Lee el JSONL. Devuelve (incidentes, líneas malformadas [(número, error)])."""
+    destino = repo / ".caja-negra" / "incidentes.jsonl"
+    if not destino.is_file():
+        return [], []
+    incidentes, malas = [], []
+    for numero, linea in enumerate(
+        destino.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        if not linea.strip():
+            continue
+        try:
+            datos = json.loads(linea)
+            if not isinstance(datos, dict):
+                raise ValueError("no es un objeto JSON")
+        except ValueError as exc:
+            if not tolerar_malas:
+                morir(f"línea {numero} malformada ({exc}); repásala con `validar`")
+            malas.append((numero, str(exc)))
+            continue
+        incidentes.append(datos)
+    return incidentes, malas
+
+
+def registrar(args):
+    repo = repo_valido(args)
     evidencias = [evidencia_relativa(repo, item) for item in args.evidencia]
     worktree = git(repo, "rev-parse", "--show-toplevel")
     git_common = git(repo, "rev-parse", "--git-common-dir")
@@ -93,6 +161,8 @@ def registrar(args):
         "pid": os.getpid(),
         "harness": detectar_harness(),
         "session_id": detectar_sesion(),
+        "severidad": args.severidad,
+        "version_metodo": version_metodo(repo),
         "fase": redactar(args.fase),
         "repo_root": str(repo),
         "cwd": str(Path.cwd().resolve()),
@@ -125,6 +195,208 @@ def registrar(args):
     return 0
 
 
+def listar(args):
+    repo = repo_valido(args)
+    incidentes, malas = cargar_incidentes(repo, tolerar_malas=True)
+    if not incidentes and not malas:
+        print("Caja negra vacía: sin incidentes registrados.")
+        return 0
+    print(f"{'fecha':<10}  {'sev':<4}  {'fase':<22}  síntoma")
+    for datos in incidentes:
+        fecha = str(datos.get("timestamp", ""))[:10] or "sin fecha"
+        severidad = str(datos.get("severidad") or "nota")
+        fase = " ".join(str(datos.get("fase", "")).split())
+        fase = fase[:21] + "…" if len(fase) > 22 else fase
+        sintoma = " ".join(str(datos.get("sintoma", "")).split())
+        sintoma = sintoma[:59] + "…" if len(sintoma) > 60 else sintoma
+        print(f"{fecha:<10}  {severidad:<4}  {fase:<22}  {sintoma}")
+    resumen = f"{len(incidentes)} incidente(s)"
+    if malas:
+        resumen += f" · {len(malas)} línea(s) malformadas (repásalas con `validar`)"
+    print(resumen)
+    return 0
+
+
+def validar(args):
+    repo = repo_valido(args)
+    destino = repo / ".caja-negra" / "incidentes.jsonl"
+    if not destino.is_file():
+        print(f"OK: no hay caja negra que validar ({destino} no existe).")
+        return 0
+    incidentes, malas = cargar_incidentes(repo, tolerar_malas=True)
+    problemas = [f"línea {numero}: JSON malformado ({error})" for numero, error in malas]
+    for datos in incidentes:
+        etiqueta = str(datos.get("id") or "sin id")
+        faltan = [campo for campo in OBLIGATORIOS if not str(datos.get(campo) or "").strip()]
+        if faltan:
+            problemas.append(f"incidente {etiqueta}: faltan campos {', '.join(faltan)}")
+        # v1 no llevaba severidad ni version_metodo: su ausencia es válida; si están, se
+        # valida su forma.
+        if "severidad" in datos and datos["severidad"] not in SEVERIDADES:
+            problemas.append(
+                f"incidente {etiqueta}: severidad '{datos['severidad']}' fuera de "
+                f"{'/'.join(SEVERIDADES)}"
+            )
+        if "version_metodo" in datos and not str(datos["version_metodo"] or "").strip():
+            problemas.append(f"incidente {etiqueta}: version_metodo vacía")
+        if "evidencia" in datos and not isinstance(datos["evidencia"], list):
+            problemas.append(f"incidente {etiqueta}: evidencia debe ser una lista")
+    if problemas:
+        for problema in problemas:
+            print(f"FAIL {problema}")
+        print(f"{len(problemas)} problema(s) en {destino}")
+        return 1
+    print(f"OK {len(incidentes)} incidente(s) bien formados en {destino}")
+    return 0
+
+
+def redactar_envio(texto):
+    """Redacción reforzada para lo que sale del ordenador: secretos + rutas de usuario."""
+    return RE_HOME.sub("~", redactar(texto))
+
+
+def _redactar_valor(valor):
+    if isinstance(valor, str):
+        return redactar_envio(valor)
+    if isinstance(valor, list):
+        return [_redactar_valor(item) for item in valor]
+    if isinstance(valor, dict):
+        return {clave: _redactar_valor(item) for clave, item in valor.items()}
+    return valor
+
+
+def redactar_incidente(incidente):
+    """Copia del incidente lista para viajar: todo texto redactado y sin hostname."""
+    return {
+        clave: _redactar_valor(valor)
+        for clave, valor in incidente.items()
+        if clave != "host"
+    }
+
+
+def credencial_residual(texto):
+    """Nombre del patrón de credencial que sobrevivió a la redacción, o ""."""
+    for etiqueta, patron in CREDENCIALES_RESIDUALES:
+        if patron.search(texto):
+            return etiqueta
+    return ""
+
+
+def empaquetar(incidentes, version, limite=None):
+    """Paquete de envío. Si no cabe en `limite` bytes, conserva los MÁS RECIENTES.
+
+    Devuelve (paquete, texto JSON). El JSONL es cronológico: truncar es descartar por
+    delante. La plataforma viaja sin hostname ni usuario.
+    """
+    total = len(incidentes)
+    recorte = list(incidentes)
+    while True:
+        paquete = {
+            "schema": "caja-negra-envio-v1",
+            "version_metodo": version,
+            "plataforma": {
+                "sistema": platform.system(),
+                "version_sistema": platform.release(),
+                "python": platform.python_version(),
+            },
+            "total_registrados": total,
+            "incluidos": len(recorte),
+            "truncado": len(recorte) < total,
+            "incidentes": recorte,
+        }
+        texto = json.dumps(paquete, ensure_ascii=False, indent=2, sort_keys=True)
+        if limite is None or len(texto.encode("utf-8")) <= limite or not recorte:
+            return paquete, texto
+        recorte = recorte[1:]
+
+
+def hay_gh():
+    if not shutil.which("gh"):
+        return False
+    comprobacion = subprocess.run(
+        ["gh", "auth", "status"], capture_output=True, text=True, check=False
+    )
+    return comprobacion.returncode == 0
+
+
+def cuerpo_issue(paquete, texto):
+    lineas = [
+        f"Caja negra compartida voluntariamente: {paquete['incluidos']} incidente(s), "
+        f"método {paquete['version_metodo']}.",
+        "Redactado en origen: sin secretos, sin hostname y con las rutas de usuario "
+        "colapsadas a `~`.",
+    ]
+    if paquete["truncado"]:
+        lineas.append(
+            f"TRUNCADO: de {paquete['total_registrados']} incidentes solo viajan los "
+            f"{paquete['incluidos']} más recientes (el paquete no cabía entero)."
+        )
+    return "\n".join(lineas) + "\n\n```json\n" + texto + "\n```\n"
+
+
+def enviar(args):
+    repo = repo_valido(args)
+    # (a) Redactar ANTES de cualquier salida: nada del JSONL crudo llega a la pantalla.
+    crudos, _ = cargar_incidentes(repo, tolerar_malas=False)
+    if not crudos:
+        print("No hay nada que enviar: la caja negra está vacía.")
+        return 0
+    incidentes = [redactar_incidente(incidente) for incidente in crudos]
+    version = version_metodo(repo)
+    con_gh = hay_gh()
+    paquete, texto = empaquetar(
+        incidentes, version, limite=LIMITE_ENVIO if con_gh else None
+    )
+    # (e) Si tras redactar queda una credencial reconocible, no sale nada de aquí.
+    residuo = credencial_residual(texto)
+    if residuo:
+        morir(
+            "NO se envía nada: tras la redacción sigue habiendo un patrón de credencial "
+            f"que no sé limpiar ({residuo}). Limpia ese incidente a mano en "
+            ".caja-negra/incidentes.jsonl y vuelve a intentarlo."
+        )
+    # (d) Enseñar antes exactamente lo que viaja, y pedir permiso.
+    print("Esto es EXACTAMENTE lo que se compartiría (ya redactado: sin secretos, sin "
+          "hostname y sin tu nombre de usuario en las rutas):\n")
+    print(texto)
+    if paquete["truncado"]:
+        print(f"\nAviso: de {paquete['total_registrados']} incidentes solo viajan los "
+              f"{paquete['incluidos']} más recientes; el paquete no cabía entero.")
+    print("\nCompartirlo es VOLUNTARIO y sirve solo para mejorar el método. "
+          "No se envía nada más que lo de arriba.")
+    if not args.si:
+        try:
+            respuesta = input("¿Enviar ahora? [s/N] ").strip().lower()
+        except EOFError:
+            respuesta = ""
+        if respuesta not in {"s", "si", "sí"}:
+            print("No se envió nada.")
+            return 0
+    if con_gh:
+        titulo = f"[caja-negra] {paquete['incluidos']} incidentes · método {version}"
+        resultado = subprocess.run(
+            ["gh", "issue", "create", "--repo", DESTINO_ISSUES,
+             "--title", titulo, "--body-file", "-"],
+            input=cuerpo_issue(paquete, texto),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        if resultado.returncode == 0:
+            print(f"Enviado. Gracias — el issue: {resultado.stdout.strip()}")
+            return 0
+        print("gh no pudo crear el issue; te dejo el paquete en un fichero.")
+    fecha = datetime.date.today().isoformat()
+    destino = repo / ".caja-negra" / f"envio-{fecha}.json"
+    destino.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    destino.write_text(texto + "\n", encoding="utf-8")
+    print(f"Paquete guardado en {destino} (no se ha enviado nada).")
+    print("Si quieres compartirlo: abre un issue en "
+          f"https://github.com/{DESTINO_ISSUES}/issues y pega o adjunta ese fichero. "
+          "Es voluntario.")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="comando", required=True)
@@ -136,7 +408,24 @@ def main():
     p.add_argument("--actual", required=True)
     p.add_argument("--workaround", default="")
     p.add_argument("--evidencia", action="append", default=[])
+    p.add_argument("--severidad", choices=SEVERIDADES, default="nota",
+                   help="P0 bloquea, P1 duele, P2 molesta, nota es contexto (defecto)")
     p.set_defaults(func=registrar)
+    p = sub.add_parser("listar", help="tabla compacta de los incidentes registrados")
+    p.add_argument("--repo", default=".", help="raíz declarada del meta-repo")
+    p.set_defaults(func=listar)
+    p = sub.add_parser("validar", help="revisa el JSONL: líneas rotas o campos ausentes")
+    p.add_argument("--repo", default=".", help="raíz declarada del meta-repo")
+    p.set_defaults(func=validar)
+    p = sub.add_parser(
+        "enviar",
+        help="VOLUNTARIO: comparte los incidentes redactados con el autor de la "
+             "herramienta (enseña antes lo que viaja y pide confirmación)",
+    )
+    p.add_argument("--repo", default=".", help="raíz declarada del meta-repo")
+    p.add_argument("--si", action="store_true",
+                   help="no preguntar (para uso no interactivo); el envío sigue siendo opt-in")
+    p.set_defaults(func=enviar)
     args = parser.parse_args()
     return args.func(args)
 

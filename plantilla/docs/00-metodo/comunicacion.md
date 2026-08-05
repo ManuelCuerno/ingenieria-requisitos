@@ -50,3 +50,9 @@ Lo que el usuario no puede decidir ni tocar, se calla.
 ## Cómo se cierra un mensaje
 
 Pidiendo lo que necesitas en preguntas de sí o no, y que el informe quepa en una pantalla.
+
+## Compartir la caja negra es del usuario, no tuyo
+
+Los tropiezos registrados pueden compartirse con el autor de la herramienta con
+`scripts/caja_negra.py enviar`: es voluntario, enseña antes el paquete ya redactado (sin
+secretos, hostname ni nombre de usuario) y no manda nada sin un sí explícito del usuario.
