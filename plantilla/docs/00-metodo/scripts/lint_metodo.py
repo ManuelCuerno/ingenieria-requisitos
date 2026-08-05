@@ -1016,6 +1016,30 @@ for etiqueta, carpeta in ([("main", RAIZ / "main")]
         else:
             ok(f"{etiqueta}/: Dockerfile con .dockerignore que excluye el .env")
 
+# --- 7a-bis. Matar procesos por nombre está prohibido en artefactos ejecutables ---
+# En una máquina con varios agentes, un `pkill -f` o un `killall` de un script mata trabajo
+# ajeno (pasó: suites paralelas compartiendo máquina). Se mata por PID registrado, nunca por
+# nombre. Solo se miran artefactos ejecutables del repo de código: la prosa puede discutirlo.
+PATRONES_KILL = ("pkill -f", "killall ")
+artefactos_kill = []
+if repo_cod.is_dir():
+    for rel in ("scripts", ".github/workflows"):
+        base = repo_cod / rel
+        if base.is_dir():
+            artefactos_kill += [p for p in base.rglob("*") if p.is_file()]
+    artefactos_kill += [repo_cod / n for n in ("Makefile", "makefile", "package.json")
+                        if (repo_cod / n).is_file()]
+culpables_kill = sorted(
+    str(p.relative_to(RAIZ))
+    for p in artefactos_kill
+    if any(pat in p.read_text(encoding="utf-8", errors="ignore") for pat in PATRONES_KILL))
+if culpables_kill:
+    fail(f"pkill -f / killall en {', '.join(culpables_kill)}: eso mata procesos de otros "
+         f"agentes o proyectos que compartan la máquina. Guarda el PID al lanzar y mata ese "
+         f"PID exacto")
+else:
+    ok("sin pkill -f ni killall en scripts, workflows ni Makefile del repo de código")
+
 # --- 7b. El CI real nace junto al stack; empezarlo y dejarlo a medias es fallo ---
 PIEZAS_CI = (
     "scripts/ci/full-suite", "scripts/ci/lint", "scripts/ci/security",

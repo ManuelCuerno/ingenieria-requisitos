@@ -15,8 +15,12 @@ arbitrario.
    un probe. Solo si demuestra que el límite muerde arranca el harness y deja el recibo bajo
    `.runtime/ejecuciones/`, con digest del wrapper, fencing y estado Git inicial/final.
 
-Busca, por este orden, `srt`, `sandbox-exec` o `bwrap`. Si no encuentra un mecanismo se niega
-a ejecutar. No hay bypass ni modo que solo imprima un perfil.
+Mecanismos por plataforma, en el orden real del código: en macOS, `sandbox-exec` (Seatbelt) y
+después `srt`; en Linux, `bwrap` y después `srt`. Un `srt` que no sea propiedad de root se
+rechaza (`EXIGIR_OWNER_SISTEMA`): un binario que puede reemplazar el mismo usuario no es una
+frontera. Consecuencia honesta: en un macOS típico el mecanismo será Seatbelt, cuyo perfil NO
+limita la red. Si no encuentra ningún mecanismo se niega a ejecutar. No hay bypass ni modo que
+solo imprima un perfil.
 
 ## Límites ejecutables
 
@@ -42,6 +46,8 @@ el nombre declarado en el frontmatter de `SKILL.md` debe coincidir con el solici
 
 Para código hostil o ejecución desatendida se necesita además una frontera administrada por el
 dueño de la máquina. Seatbelt está deprecado y ni Seatbelt ni bwrap filtran red por dominio;
-para esa garantía se usa `srt` o un contenedor con política de red validada.
+esa garantía solo la da un `srt` propiedad de root o un contenedor con política de red
+validada — y en su ausencia este método NO promete red limitada: lo dice el recibo de la
+ejecución, no lo disimula.
 La ruta y el SHA-256 no protegen frente a un atacante con el mismo UID que pueda sustituir el
 wrapper justo antes de `exec`; ese caso necesita aislamiento administrado por otro principal.

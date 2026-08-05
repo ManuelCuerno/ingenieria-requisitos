@@ -1125,6 +1125,34 @@ class ContratoCITest(unittest.TestCase):
                 f"No activó E2E para {ubicacion}:\n{resultado.stdout}{resultado.stderr}",
             )
 
+    def test_lint_metodo_rechaza_pkill_en_artefactos_ejecutables(self):
+        workspace = self.crear_workspace_metodo()
+        scripts = workspace / "main" / "scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        guion = scripts / "dev.sh"
+        guion.write_text("#!/bin/sh\npkill -f 'node server'\n", encoding="utf-8")
+
+        resultado = subprocess.run(
+            [sys.executable, str(workspace / "docs/00-metodo/scripts/lint_metodo.py")],
+            cwd=workspace,
+            text=True,
+            capture_output=True,
+            env=self.git_env,
+        )
+        self.assertEqual(resultado.returncode, 1, resultado.stdout)
+        self.assertIn("pkill -f / killall en", resultado.stdout)
+        self.assertIn("main/scripts/dev.sh", resultado.stdout)
+
+        guion.write_text('#!/bin/sh\nkill "$(cat .runtime/pid)"\n', encoding="utf-8")
+        resultado = subprocess.run(
+            [sys.executable, str(workspace / "docs/00-metodo/scripts/lint_metodo.py")],
+            cwd=workspace,
+            text=True,
+            capture_output=True,
+            env=self.git_env,
+        )
+        self.assertNotIn("pkill -f / killall en", resultado.stdout)
+
     def escribir_manifiesto_metodo(self, workspace):
         base = workspace / "docs" / "00-metodo"
         archivos = sorted(
