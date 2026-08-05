@@ -15,9 +15,29 @@ import http.server
 import json
 import os
 import re
+import socket
 import sys
 import threading
 import time
+
+
+class ServidorVisor(http.server.ThreadingHTTPServer):
+    """En Windows, SO_REUSEADDR deja que un segundo visor se quede con un puerto
+    ya en uso y le robe las conexiones al primero (reportado en el bug del
+    puerto 8765). El bind debe ser exclusivo allí; en el resto de plataformas
+    SO_REUSEADDR conserva su comportamiento normal (rearrancar sin esperar el
+    TIME_WAIT) y el robo no es posible."""
+
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if sys.platform == "win32":
+            if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                self.socket.setsockopt(socket.SOL_SOCKET,
+                                       socket.SO_EXCLUSIVEADDRUSE, 1)
+        else:
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        http.server.HTTPServer.server_bind(self)
 import webbrowser
 from urllib.parse import urlsplit
 
@@ -154,7 +174,7 @@ def main():
 
     estado = {"ultimo": time.time()}
     try:
-        servidor = http.server.ThreadingHTTPServer(
+        servidor = ServidorVisor(
             ("127.0.0.1", args.puerto), hacer_handler(ruta_datos, estado)
         )
     except OSError as exc:
