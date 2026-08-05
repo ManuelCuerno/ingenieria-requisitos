@@ -3140,7 +3140,7 @@ docs/
 │   ├── runbooks/    14 ficheros
 │   ├── plantillas/  12 ficheros
 │   ├── scripts/     unidad.py · lint_metodo.py · doctor.py
-│   │                lint_deploy.py · sandbox_lanzar.py
+│   │                lint_deploy.py · ejecucion.py · lease.py
 │   ├── decisiones/  ADR-001 … ADR-011 (del MÉTODO)
 │   └── requisitos/  kit heredado: RUNBOOK.md + visor + validadores
 ├── 01-constitucion/ manifiesto.md (compilado de los planos) + bias.md
@@ -3966,12 +3966,12 @@ ninguna de las cuatro ──► CIERRE BLOQUEADO
           </div>
 
           <div class="card">
-            <h5>sandbox_lanzar.py</h5>
-            <p class="sub">Aislamiento <strong>opcional</strong> del constructor. No se ejecuta automáticamente y no es por sí solo una garantía de seguridad.</p>
+            <h5>ejecucion.py</h5>
+            <p class="sub">El lanzador del constructor: identidad verificada <strong>antes</strong> de arrancar el modelo. Sustituye al antiguo <code>sandbox_lanzar.py</code>.</p>
             <ul>
-              <li>Busca, por ese orden: <code>srt</code>, <code>sandbox-exec</code>, <code>bwrap</code>. Sin mecanismo se niega a ejecutar, salvo <code>--permitir-sin-sandbox</code>.</li>
-              <li>Intenta limitar: escritura al worktree, bloqueo de hooks y config compartidos de git, bloqueo de lectura de directorios de credenciales, red denegada si el mecanismo puede.</li>
-              <li>Se prueba primero sin <code>--ejecutar</code> y se comprueba a mano en esa máquina.</li>
+              <li>Fija el <code>cwd</code> al worktree de la unidad y lo comprueba (<code>pwd</code>, rama, <code>common-dir</code>): si algo no cuadra, el modelo no llega a arrancar.</li>
+              <li>Home efímero y entorno saneado: el constructor no descubre plugins, skills ni credenciales del usuario.</li>
+              <li>Sandbox del sistema cuando existe; sin mecanismo fiable, lo dice — no finge un candado.</li>
             </ul>
             <p class="foot-line">Para código hostil hace falta una frontera administrada por el dueño de la máquina. Un repositorio clonado no puede concederse privilegios de seguridad a sí mismo.</p>
           </div>

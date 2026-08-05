@@ -113,8 +113,8 @@ cada proceso con `peticion.py marcar-proceso P-ID --proceso unidad:NNN-slug --es
 
 ## Suites de este método
 
-- rápida: `visor/tests/run-fast`
-- nocturna/adversarial: `visor/tests/run-nightly`
-
+Viven en la herramienta de ingeniería de requisitos (el repositorio que montó este workspace),
+no aquí: `visor/tests/run-fast` (rápida) y `visor/tests/run-nightly` (nocturna/adversarial).
 Ambas son herméticas. La nocturna recorre fixtures legacy→new→mutant, matrices de DSN y dos árboles
-concurrentes sin abrir red, Docker ni bases reales.
+concurrentes sin abrir red, Docker ni bases reales. Desde un workspace no hay nada que ejecutar:
+estos scripts se prueban en origen y llegan ya probados con cada actualización del método.
