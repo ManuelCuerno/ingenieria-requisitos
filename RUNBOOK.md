@@ -889,17 +889,25 @@ distancia. Si no hay un punto de retorno limpio, no se toca nada y se dice por q
    el método nuevo. Si aparece trabajo después, las rutas explícitas también lo dejan fuera. Sobrescribe el método, lo anota
    en el HISTORIAL y pasa el linter de ese workspace **antes** del commit final.
    Si el proceso cae, la siguiente ejecución recupera primero el snapshot durable de
-   `.runtime/transactions/modo-d.json`. Si el linter falla, restaura únicamente las rutas tocadas y devuelve error:
-   nunca anuncia una actualización aplicada a medias. La primera adopción del
-   inbox guarda unidades, bugs y ramas anteriores en `LEGACY.json` con modo
+   `.runtime/transactions/modo-d.json`. Si el linter falla, mide de quién es el rojo
+   comparándolo con lo que ese mismo workspace decía ANTES de tocarlo: los fallos que ya
+   estaban no revierten nada (se avisa "ya estaban antes de actualizar" y la actualización
+   se queda — revertir no los limpiaría y dejaría el workspace atrapado en el método viejo);
+   solo si la actualización introduce fallos NUEVOS restaura las rutas tocadas, los lista
+   como causa y devuelve error: nunca anuncia una actualización aplicada a medias. La primera
+   adopción del inbox guarda unidades, bugs y ramas anteriores en `LEGACY.json` con modo
    `observacion`; no fabrica peticiones retroactivas.
 
 3. **Enséñale el resultado.** `git -C <workspace> log --oneline -2` y
    `git -C <workspace> show`: qué ha cambiado, contado en negocio ("ahora el
    cierre avisa si algo se quedó sin guardar"). Si algo no le convence, el
    comando para deshacerlo está escrito en `docs/00-metodo/HISTORIAL.md`. Si ese
-   workspace tiene remoto, un `git push` y sus otras máquinas se lo bajan con un
-   `git pull` normal.
+   workspace tiene remoto, ofrécele publicarlo — pero **`git push` solo con su OK
+   explícito, workspace por workspace**: publicar en un remoto es del dueño, nunca
+   parte automática de actualizar (un agente ya publicó una actualización sin
+   autoridad en un repo ajeno y quedó como incidente P1). Con su OK, sus otras
+   máquinas se lo bajan con un `git pull` normal; sin él, la actualización se
+   queda local y perfecta.
 
 Límites que el modo D no cruza jamás: no toca `01-constitucion/`,
 `02-flujos/`, `03-investigacion/`, `04-planificacion/`, unidades vivas o

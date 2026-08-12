@@ -3,11 +3,11 @@ import json
 import datetime
 import re
 import os
-import select
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -78,35 +78,45 @@ class PeticionUnidadTest(unittest.TestCase):
             [sys.executable, str(script), *args],
             cwd=self.ws,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
         )
 
     def proceso_con_failpoint(self, nombre, *args, session_id):
-        ready_read, ready_write = os.pipe()
-        wait_read, wait_write = os.pipe()
+        # Barrera por ficheros: los FDs no cruzan procesos en Windows (pass_fds
+        # es POSIX). El hijo toca `ready` al llegar y espera a que exista `gate`.
+        barrera = Path(tempfile.mkdtemp(prefix="barrera-"))
+        self.addCleanup(shutil.rmtree, barrera, True)
+        ready = barrera / "ready"
+        gate = barrera / "gate"
         env = os.environ.copy()
         prefijo = f"IR_FAILPOINT_{nombre.upper()}"
-        env[f"{prefijo}_READY_FD"] = str(ready_write)
-        env[f"{prefijo}_WAIT_FD"] = str(wait_read)
+        env[f"{prefijo}_READY_FILE"] = str(ready)
+        env[f"{prefijo}_WAIT_FILE"] = str(gate)
         env["IR_SESSION_ID"] = session_id
         proceso = subprocess.Popen(
             [sys.executable, str(self.unidad), *args],
             cwd=self.ws,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
-            pass_fds=(ready_write, wait_read),
         )
-        os.close(ready_write)
-        os.close(wait_read)
-        return proceso, ready_read, wait_write
+        return proceso, ready, gate
 
-    def esperar_barrera(self, descriptor, timeout=2):
-        legibles, _, _ = select.select([descriptor], [], [], timeout)
-        self.assertEqual(legibles, [descriptor], "el proceso no alcanzó el failpoint")
-        self.assertEqual(os.read(descriptor, 1), b"1")
-        os.close(descriptor)
+    def esperar_barrera(self, ready, timeout=2):
+        limite = time.monotonic() + timeout
+        while time.monotonic() < limite:
+            if ready.exists():
+                return
+            time.sleep(0.01)
+        self.fail("el proceso no alcanzó el failpoint")
+
+    def abrir_barrera(self, gate):
+        gate.write_text("1", encoding="ascii")
 
     def capturar(self, resumen="Cambio solicitado"):
         resultado = self.ejecutar(
@@ -256,20 +266,14 @@ class PeticionUnidadTest(unittest.TestCase):
         )
         self.addCleanup(lambda: proceso_b.poll() is None and proceso_b.kill())
 
-        legibles, _, _ = select.select([ready_b], [], [], 2)
-        self.assertEqual(legibles, [ready_b])
-        self.assertEqual(
-            os.read(ready_b, 1),
-            b"",
+        salida_b, error_b = proceso_b.communicate(timeout=3)
+        self.assertFalse(
+            ready_b.exists(),
             "el segundo proceso atravesó numeración mientras el primero conservaba el lease",
         )
-        os.close(ready_b)
-        os.close(gate_b)
-        salida_b, error_b = proceso_b.communicate(timeout=3)
         self.assertEqual(proceso_b.returncode, 1, salida_b + error_b)
         self.assertIn("numerar otra unidad", error_b)
-        os.write(gate_a, b"1")
-        os.close(gate_a)
+        self.abrir_barrera(gate_a)
         salida_a, error_a = proceso_a.communicate(timeout=3)
         self.assertEqual(proceso_a.returncode, 0, salida_a + error_a)
         reintento = self.ejecutar(self.unidad, *args_b)
@@ -299,17 +303,15 @@ class PeticionUnidadTest(unittest.TestCase):
             "despachar_antes_accion", *args, session_id="sesion-b"
         )
         self.addCleanup(lambda: proceso_b.poll() is None and proceso_b.kill())
-        legibles, _, _ = select.select([ready_b], [], [], 2)
-        self.assertEqual(legibles, [ready_b])
-        self.assertEqual(os.read(ready_b, 1), b"")
-        os.close(ready_b)
-        os.close(gate_b)
         salida_b, error_b = proceso_b.communicate(timeout=3)
+        self.assertFalse(
+            ready_b.exists(),
+            "el segundo proceso atravesó el failpoint con el lease del primero vivo",
+        )
 
         self.assertEqual(proceso_b.returncode, 1, salida_b + error_b)
         self.assertIn("propietario", error_b.lower())
-        os.write(gate_a, b"1")
-        os.close(gate_a)
+        self.abrir_barrera(gate_a)
         salida_a, error_a = proceso_a.communicate(timeout=5)
         self.assertEqual(proceso_a.returncode, 0, salida_a + error_a)
         self.assertTrue((self.ws / "worktrees" / nombre).is_dir())
@@ -343,17 +345,15 @@ class PeticionUnidadTest(unittest.TestCase):
             "despachar_antes_accion", *args_b, session_id="sesion-b"
         )
         self.addCleanup(lambda: proceso_b.poll() is None and proceso_b.kill())
-        legibles, _, _ = select.select([ready_b], [], [], 2)
-        self.assertEqual(legibles, [ready_b])
-        self.assertEqual(os.read(ready_b, 1), b"")
-        os.close(ready_b)
-        os.close(gate_b)
         salida_b, error_b = proceso_b.communicate(timeout=3)
+        self.assertFalse(
+            ready_b.exists(),
+            "el segundo proceso atravesó el failpoint con el lease del primero vivo",
+        )
 
         self.assertEqual(proceso_b.returncode, 1, salida_b + error_b)
         self.assertIn("resource:app/terminal.py", error_b)
-        os.write(gate_a, b"1")
-        os.close(gate_a)
+        self.abrir_barrera(gate_a)
         salida_a, error_a = proceso_a.communicate(timeout=5)
         self.assertEqual(proceso_a.returncode, 0, salida_a + error_a)
 
@@ -384,11 +384,9 @@ class PeticionUnidadTest(unittest.TestCase):
         self.addCleanup(lambda: proceso_b.poll() is None and proceso_b.kill())
         self.esperar_barrera(ready_b)
 
-        os.write(gate_a, b"1")
-        os.close(gate_a)
+        self.abrir_barrera(gate_a)
         salida_a, error_a = proceso_a.communicate(timeout=5)
-        os.write(gate_b, b"1")
-        os.close(gate_b)
+        self.abrir_barrera(gate_b)
         salida_b, error_b = proceso_b.communicate(timeout=5)
 
         self.assertEqual(proceso_a.returncode, 1, salida_a + error_a)
@@ -600,6 +598,49 @@ class PeticionUnidadTest(unittest.TestCase):
         ficha.write_text(texto, encoding="utf-8")
         return nombre
 
+    def test_documental_en_vuelo_no_consume_cupo_de_constructor(self):
+        """Caso de campo (05-08): el tope de vuelo contaba una auditoría
+        documental aparcada y bloqueaba el despacho de constructores. La regla 5 exime
+        a las --documental («leen, no escriben código: pueden ir en paralelo»)."""
+        doc = self.preparar_bug_aprobado(
+            "auditoria-aparcada", ficheros=["docs/00-metodo/runbooks/bug.md"]
+        )
+        despacho_doc = self.ejecutar(self.unidad, "despachar", doc, "--documental")
+        self.assertEqual(despacho_doc.returncode, 0,
+                         despacho_doc.stdout + despacho_doc.stderr)
+
+        pid = self.capturar("Cambio normal")
+        self.evaluar(pid)
+        creada = self.ejecutar(
+            self.unidad, "nueva", "feature", "cambio-normal", "--desde", pid
+        )
+        self.assertEqual(creada.returncode, 0, creada.stdout + creada.stderr)
+        nombre = next(
+            p.name for p in (self.ws / "docs/05-trabajo").iterdir()
+            if p.name.endswith("-cambio-normal")
+        )
+        self.aprobar_para_despacho(nombre)
+
+        # Sin --paralelo: la documental en vuelo no debe contar como unidad en obra.
+        resultado = self.ejecutar(self.unidad, "despachar", nombre)
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertNotIn("en vuelo", resultado.stderr)
+
+    def test_bug_evaluado_directo_se_crea_por_carril_directo(self):
+        """Incidente de campo (P1, 06-08): la evaluación aceptó ruta
+        'directo' para un bug y la creación exigía ruta 'bug' — imposible complacer
+        a las dos validaciones. Un bug evaluado como directo se crea con --directo."""
+        pid = self.capturar("El launcher no arranca Codex")
+        self.evaluar(pid, ruta="directo")
+
+        creada = self.ejecutar(
+            self.unidad, "nueva", "bug", "launcher-no-arranca", "--directo",
+            "--desde", pid,
+        )
+
+        self.assertEqual(creada.returncode, 0, creada.stdout + creada.stderr)
+
     def test_bug_del_meta_repo_se_despacha_documental_sin_worktree(self):
         nombre = self.preparar_bug_aprobado(
             "runbook-roto", ficheros=["docs/00-metodo/runbooks/bug.md"]
@@ -684,10 +725,13 @@ class PeticionUnidadTest(unittest.TestCase):
     def test_despacho_con_hook_verde_deja_entorno_y_recibo_verificados(self):
         nombre = self.preparar_feature_aprobada("hook-verde")
         hook = self.ws / "worktree-listo"
+        # El contrato (cwd = worktree y $1 = worktree) se verifica desde python:
+        # comparar $PWD con $1 dentro de sh no es portable (git-bash da /c/… y
+        # el launcher pasa C:\…; mismas carpetas, formas distintas).
         hook.write_text(
             "#!/bin/sh\n"
-            "test \"$PWD\" = \"$1\" || exit 91\n"
-            "printf preparado > .entorno-preparado\n",
+            "printf preparado > .entorno-preparado\n"
+            "printf %s \"$1\" > .arg-recibido\n",
             encoding="utf-8",
         )
         hook.chmod(0o755)
@@ -695,9 +739,14 @@ class PeticionUnidadTest(unittest.TestCase):
         resultado = self.ejecutar(self.unidad, "despachar", nombre)
 
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        worktree = self.ws / "worktrees" / nombre
         self.assertEqual(
-            (self.ws / "worktrees" / nombre / ".entorno-preparado").read_text(),
+            (worktree / ".entorno-preparado").read_text(),
             "preparado",
+        )
+        self.assertTrue(
+            os.path.samefile((worktree / ".arg-recibido").read_text(), worktree),
+            "el hook no recibió el worktree como $1",
         )
         recibo = self.recibo_preparacion(nombre)
         self.assertEqual(recibo["estado"], "preparado")
@@ -906,6 +955,60 @@ class PeticionUnidadTest(unittest.TestCase):
         )
         self.assertEqual(datos["estado"], "cerrada")
         self.assertEqual(datos["procesos"][0]["estado"], "terminal")
+
+    def test_cerrar_respeta_git_index_de_otra_sesion(self):
+        """ADR-023: el cierre reescribe el metarrepo — si otra sesión tiene
+        `git-index` (p. ej. Modo D aplicando), cerrar falla nombrando al
+        propietario y no archiva nada; al soltarse el lease, cierra normal."""
+        from importlib import util as importlib_util
+
+        pid = self.capturar("Documentar la operación bloqueada")
+        self.evaluar(pid, ruta="documentacion")
+        creada = self.ejecutar(
+            self.unidad, "nueva", "documentacion", "cierre-con-lease",
+            "--desde", pid,
+        )
+        self.assertEqual(creada.returncode, 0, creada.stderr)
+        carpeta = self.ws / "docs/05-trabajo/001-cierre-con-lease"
+        spec = carpeta / "especificacion.md"
+        texto = spec.read_text(encoding="utf-8")
+        texto = texto.replace("estado: planificada", "estado: en_revision")
+        texto = texto.replace("aprobado: no", "aprobado: 2026-08-04")
+        texto = texto.replace("\n---\n", "\nejecucion: documental\n---\n", 1)
+        spec.write_text(texto, encoding="utf-8")
+        hallazgos = carpeta / "hallazgos.md"
+        texto = hallazgos.read_text(encoding="utf-8")
+        texto = re.sub(r"^revisor:.*$", "revisor: agente-fresco", texto,
+                       count=1, flags=re.M)
+        texto = re.sub(r"^revisado:.*$", "revisado: 2026-08-04", texto,
+                       count=1, flags=re.M)
+        texto = texto.replace(
+            "- **Veredicto:** LIMPIO | HUECOS DE CORRECCIÓN",
+            "- **Veredicto:** LIMPIO",
+        )
+        hallazgos.write_text(texto, encoding="utf-8")
+        (self.ws / "docs/00-metodo/scripts/lint_metodo.py").write_text(
+            "raise SystemExit(0)\n", encoding="utf-8"
+        )
+
+        spec_lease = importlib_util.spec_from_file_location(
+            "lease_ws", self.ws / "docs/00-metodo/scripts/lease.py"
+        )
+        modulo = importlib_util.module_from_spec(spec_lease)
+        spec_lease.loader.exec_module(modulo)
+        ajeno = modulo.LeaseManager(self.ws, session_id="sesion-ajena")
+        with ajeno.acquire("git-index"):
+            bloqueado = self.ejecutar(self.unidad, "cerrar", "001-cierre-con-lease")
+        self.assertEqual(bloqueado.returncode, 1,
+                         bloqueado.stdout + bloqueado.stderr)
+        self.assertIn("cierre bloqueado", bloqueado.stderr)
+        self.assertTrue(carpeta.exists(),
+                        "el cierre bloqueado no debe archivar nada")
+
+        liberado = self.ejecutar(self.unidad, "cerrar", "001-cierre-con-lease")
+        self.assertEqual(liberado.returncode, 0,
+                         liberado.stdout + liberado.stderr)
+        self.assertFalse(carpeta.exists())
 
     def test_prototipo_no_puede_cerrar_ni_reconciliar_como_entrega(self):
         pid = self.capturar("Probar una hipótesis descartable")

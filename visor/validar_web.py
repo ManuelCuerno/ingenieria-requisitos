@@ -29,11 +29,16 @@ try:
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import sync_playwright
 except ImportError:
-    sys.exit(
-        "ERROR: falta Playwright. Instala las dependencias E2E con "
-        f"`python3 -m pip install -r \"{REQUISITOS}\"` "
-        "y después `python3 -m playwright install chromium`."
-    )
+    # El módulo debe poder importarse sin Playwright (los tests de lógica pura
+    # lo hacen); el error salta al EJECUTAR, no al importar.
+    PlaywrightError = None
+    sync_playwright = None
+
+FALTA_PLAYWRIGHT = (
+    "ERROR: falta Playwright. Instala las dependencias E2E con "
+    f"`python3 -m pip install -r \"{REQUISITOS}\"` "
+    "y después `python3 -m playwright install chromium`."
+)
 
 
 SERVIR = BASE / "servir.py"
@@ -182,17 +187,66 @@ def comprobar_lateral(page, datos, ancho):
         )
 
 
+def volver_a_vista_global(page, datos):
+    """Tras recorrer el lateral, la SPA queda en la ÚLTIMA actividad, una sub-vista
+    que oculta el `nav` de pestañas (plantilla.html: pintarVacia hace nav.hidden).
+    El botón del mapa dispara `seleccionar('mapa')` y restaura la vista global con
+    pestañas; una navegación por hash (#resumen) NO sirve: el visor lee el hash una
+    sola vez al arrancar y no escucha `hashchange` (issue #3). En proyectos sin mapa
+    el lateral ya deja una vista con nav, así que no hay nada que restaurar."""
+    if not datos.get("actividades"):
+        return
+    page.get_by_role("button", name="🗺 El mapa", exact=True).click()
+    page.wait_for_function(
+        """() => Array.from(document.querySelectorAll('#menuIzq button'))
+          .some(b => b.textContent.trim() === '🗺 El mapa' &&
+                     b.classList.contains('activo'))"""
+    )
+
+
+def pestana_si_existe(page, nombre):
+    """El botón de la pestaña si el visor decidió pintarla, o None. Qué pestañas
+    existen lo decide plantilla.html (p.ej. 'Por persona' exige actores + flujos o
+    superficie); en vez de reimplementar esa lógica en Python —y desalinearse: `!!{}`
+    es true en JS pero `{}` es falso en Python— se pregunta al DOM ya en la vista
+    global."""
+    boton = page.get_by_role("button", name=nombre, exact=True)
+    return boton if boton.count() else None
+
+
 def comprobar_contrato_e2e(page, datos):
     pruebas = datos.get("pruebas_e2e") or []
     restricciones = ((datos.get("superficie") or {}).get("permisos") or {}).get(
         "restricciones"
     ) or []
     actores = datos.get("actores") or []
-    if not actores:
-        return
 
-    page.get_by_role("button", name="Por persona", exact=True).click()
+    volver_a_vista_global(page, datos)
+
     permisos = ((datos.get("superficie") or {}).get("permisos") or {})
+    boton_actores = pestana_si_existe(page, "Por persona") if actores else None
+    if boton_actores is not None:
+        boton_actores.click()
+        comprobar_actores(page, actores, permisos)
+
+    if pruebas and pestana_si_existe(page, "Las entregas") is not None:
+        page.get_by_role("button", name="Las entregas", exact=True).click()
+        texto_recorridos = page.locator("#s-recorridos").inner_text().casefold()
+        for prueba in pruebas:
+            if str(prueba.get("id")).casefold() not in texto_recorridos:
+                raise AssertionError("la selección %s no aparece en Recorridos" % prueba.get("id"))
+
+    if restricciones and pestana_si_existe(page, "Por dónde se usa") is not None:
+        page.get_by_role("button", name="Por dónde se usa", exact=True).click()
+        texto_superficie = page.locator("#s-superficie").inner_text().casefold()
+        for restriccion in restricciones:
+            if str(restriccion.get("id")).casefold() not in texto_superficie:
+                raise AssertionError(
+                    "la restricción %s no aparece en Superficie" % restriccion.get("id")
+                )
+
+
+def comprobar_actores(page, actores, permisos):
     tarjetas = {
         candidata.locator(".tarjeta-cabecera .nombre").inner_text(): candidata
         for candidata in page.locator("#s-actores .tarjeta").all()
@@ -245,24 +299,10 @@ def comprobar_contrato_e2e(page, datos):
                     (actor.get("nombre"), accion)
                 )
 
-    if pruebas:
-        page.get_by_role("button", name="Las entregas", exact=True).click()
-        texto_recorridos = page.locator("#s-recorridos").inner_text().casefold()
-        for prueba in pruebas:
-            if str(prueba.get("id")).casefold() not in texto_recorridos:
-                raise AssertionError("la selección %s no aparece en Recorridos" % prueba.get("id"))
-
-    if restricciones:
-        page.get_by_role("button", name="Por dónde se usa", exact=True).click()
-        texto_superficie = page.locator("#s-superficie").inner_text().casefold()
-        for restriccion in restricciones:
-            if str(restriccion.get("id")).casefold() not in texto_superficie:
-                raise AssertionError(
-                    "la restricción %s no aparece en Superficie" % restriccion.get("id")
-                )
-
 
 def main():
+    if sync_playwright is None:
+        sys.exit(FALTA_PLAYWRIGHT)
     parser = argparse.ArgumentParser(
         description="Valida con navegador real el lateral del visor"
     )

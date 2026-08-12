@@ -631,6 +631,9 @@ else:
         else:
             rotos = []
             for relativo in archivos_metodo:
+                # Manifiestos generados en Windows antes de 1.1.3 traen \ como
+                # separador; se normaliza al leer y Modo D los reescribe con /.
+                relativo = str(relativo).replace("\\", "/")
                 ruta = RAIZ / relativo
                 if not ruta.is_file():
                     rotos.append(f"{relativo} (no existe)")
@@ -890,9 +893,19 @@ for nombre in sorted(en_obra):
         elif tiene_local:
             codigo, salida = git(repo_cod, "rev-list", "--count", f"{rama_principal}..{nombre}")
             if codigo == 0 and salida.strip() == "0":
-                fail(f"{nombre}: en_revision y su rama no tiene NI UN commit por encima de "
-                     f"{rama_principal} — no hay nada que revisar ni que mergear (¿el "
-                     f"constructor murió a mitad?)")
+                # 0 commits por encima también es la foto DESPUÉS de un fast-forward: la
+                # rama quedó contenida en la principal y la unidad espera validación. Si la
+                # bitácora acredita el merge (fusion: anotado y ese commit dentro de la
+                # principal), no hay constructor muerto que denunciar (incidente
+                # incidente de campo, 06-08: FAIL precisamente por haber fusionado).
+                acreditada = anotada and git(
+                    repo_cod, "merge-base", "--is-ancestor", anotada, rama_principal
+                )[0] == 0
+                if not acreditada:
+                    fail(f"{nombre}: en_revision y su rama no tiene NI UN commit por encima "
+                         f"de {rama_principal} — no hay nada que revisar ni que mergear (¿el "
+                         f"constructor murió a mitad?). Si en realidad ya se fusionó, la "
+                         f"ficha debe acreditarlo con su 'fusion: <sha>'")
 
 # --- 6. Archivo: lo archivado debe estar mergeada/descartada ---
 archivo = trabajo / "archivo"
@@ -1030,7 +1043,7 @@ if repo_cod.is_dir():
     artefactos_kill += [repo_cod / n for n in ("Makefile", "makefile", "package.json")
                         if (repo_cod / n).is_file()]
 culpables_kill = sorted(
-    str(p.relative_to(RAIZ))
+    p.relative_to(RAIZ).as_posix()
     for p in artefactos_kill
     if any(pat in p.read_text(encoding="utf-8", errors="ignore") for pat in PATRONES_KILL))
 if culpables_kill:

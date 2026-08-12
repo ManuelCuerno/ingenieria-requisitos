@@ -113,6 +113,14 @@ def rutas_sucias(workspace):
     )
 
 
+def colision_tardia(workspace, rutas_tocadas):
+    """Rutas del método que Modo D va a sobrescribir y que HAN ENSUCIADO desde que
+    se declaró el árbol limpio. Reejecuta la comprobación de suciedad justo antes de
+    escribir para no capturar (y perder) una edición aparecida en la ventana."""
+    sucias = set(rutas_sucias(workspace))
+    return sorted(sucias.intersection(rutas_tocadas))
+
+
 def trabajo_en_vuelo(workspace):
     """Devuelve fichas cuyo estado declara trabajo operativo todavía activo."""
     candidatas = []
@@ -451,6 +459,28 @@ def pasar_linter(workspace):
     return r.returncode == 0, salida
 
 
+def lineas_fail(salida):
+    """Las líneas FAIL exactas de una salida del linter, sin sangría."""
+    return {
+        linea.strip() for linea in salida.splitlines()
+        if linea.strip().startswith("FAIL ")
+    }
+
+
+def fallos_del_linter(workspace):
+    """FAIL que el linter del workspace da AHORA; None si no hay linter que consultar.
+
+    Es la línea base previa a actualizar: sin ella no se distingue un fallo que la
+    actualización introduce de uno que el workspace ya arrastraba, y ese matiz decide
+    si se revierte (culpa nuestra) o se avisa (deuda del workspace)."""
+    linter = workspace / "docs/00-metodo/scripts/lint_metodo.py"
+    if not linter.is_file():
+        return None
+    r = subprocess.run([sys.executable, str(linter)], cwd=str(workspace), capture_output=True,
+                       text=True, encoding="utf-8", errors="replace")
+    return lineas_fail(r.stdout + r.stderr)
+
+
 def snapshot_rutas(workspace, rutas):
     return {relativo: estado_ruta(workspace, relativo) for relativo in rutas}
 
@@ -521,7 +551,12 @@ def escribir_bytes_atomico(
     descriptor, temporal = tempfile.mkstemp(prefix=f".{destino.name}.modo-d-", dir=destino.parent)
     try:
         with os.fdopen(descriptor, "wb") as stream:
-            os.fchmod(stream.fileno(), stat.S_IMODE(modo))
+            if hasattr(os, "fchmod"):
+                os.fchmod(stream.fileno(), stat.S_IMODE(modo))
+            else:
+                # Windows no tiene fchmod; el chmod va sobre la ruta temporal, que
+                # todavía es privada de este proceso.
+                os.chmod(temporal, stat.S_IMODE(modo))
             stream.write(contenido)
             stream.flush()
             os.fsync(stream.fileno())
@@ -545,7 +580,10 @@ def estado_ruta(workspace, relativo):
         return None
     if not stat.S_ISREG(estado_previo.st_mode):
         raise RuntimeError(f"Modo D rechaza objeto no regular: {relativo}")
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    # O_BINARY: en Windows os.open abre en modo texto de la CRT y os.read
+    # traduciría CRLF→LF (y truncaría en 0x1A). El snapshot debe ser los BYTES
+    # exactos del disco: de ellos dependen las huellas, el journal y la reversión.
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     descriptor = os.open(ruta, flags)
     try:
         estado_abierto = os.fstat(descriptor)
@@ -566,7 +604,15 @@ def huella_estado(estado):
     if estado is None:
         return "ausente"
     contenido, modo = estado
-    return f"{stat.S_IMODE(modo):04o}:{hashlib.sha256(contenido).hexdigest()}"
+    modo = stat.S_IMODE(modo)
+    if os.name == "nt":
+        # Windows no conserva el modo Unix: un 0o644/0o755 recién escrito se relee como
+        # 0o666, y el fichero que Modo D ACABABA de publicar pasaba por "trabajo ajeno"
+        # y abortaba la actualización (caso de campo, 09-08). Se colapsa el modo a
+        # escribible/solo-lectura, que es lo único que Windows distingue; el sha256 del
+        # contenido sigue siendo exacto.
+        modo = 0o666 if modo & 0o200 else 0o444
+    return f"{modo:04o}:{hashlib.sha256(contenido).hexdigest()}"
 
 
 def estados_iguales(primero, segundo):
@@ -794,6 +840,10 @@ def preparar_publicado(workspace, cambios, retirados, esperado, snapshot, sha, o
 
 def _aplicar_bajo_lease(workspace, titulo, autoridad):
     repo_config.repo_code(workspace)
+    # El método compara BYTES (huellas sha256, journal, reversión exacta): en el
+    # meta-repo git no convierte finales de línea jamás. Config del repo, no
+    # global (Windows suele traer autocrlf=true); idempotente y autosanadora.
+    git(workspace, "config", "core.autocrlf", "false")
     recuperar_journal(workspace)
     problema_remoto = comprobar_remoto(workspace)
     if problema_remoto:
@@ -816,12 +866,26 @@ def _aplicar_bajo_lease(workspace, titulo, autoridad):
     if not cambios and not retirados:
         return 0
 
+    fallos_previos = fallos_del_linter(workspace)
     operaciones = list(cambios) + list(retirados)
     rutas_tocadas = list(operaciones)
     for extra in ("METODO.json", HISTORIAL):
         if extra not in rutas_tocadas:
             rutas_tocadas.append(extra)
     snapshot = snapshot_rutas(workspace, rutas_tocadas)
+    # Cierre de carrera: entre punto_de_retorno (que declaró el árbol limpio) y aquí
+    # corrió el linter completo — segundos en los que el usuario u otro agente pudo
+    # editar un fichero del método. Sin este recheck, el snapshot habría capturado
+    # esa edición como "original" y el bucle la sobrescribiría y commitearía: pérdida
+    # silenciosa. Si cualquier ruta a tocar ensució, se aborta ANTES de escribir nada.
+    colision = colision_tardia(workspace, rutas_tocadas)
+    if colision:
+        muestra = ", ".join(colision[:5])
+        resto = f" (+{len(colision) - 5})" if len(colision) > 5 else ""
+        print(f"\n    NO TOCO NADA: apareció trabajo sin commitear en rutas del método "
+              f"mientras preparaba la actualización: {muestra}{resto}. Commitéalo o "
+              f"descártalo y reintenta.")
+        return 1
     publicado = preparar_publicado(
         workspace, cambios, retirados, esperado, snapshot, sha, operaciones
     )
@@ -848,14 +912,42 @@ def _aplicar_bajo_lease(workspace, titulo, autoridad):
             )
             gestion_leases.failpoint("actualizar_despues_primera_escritura")
 
-    linter_ok, _ = pasar_linter(workspace)
+    linter_ok, salida_linter = pasar_linter(workspace)
     if not linter_ok:
-        verificar_recuperable(workspace, snapshot, publicado)
-        restaurar_rutas(workspace, snapshot)
-        (workspace / JOURNAL).unlink(missing_ok=True)
-        print("\n    ACTUALIZACIÓN REVERTIDA: el linter falló; solo se restauraron las "
-              "rutas que esta ejecución había tocado.")
-        return 1
+        actuales = lineas_fail(salida_linter)
+        if fallos_previos is None:
+            heredados, nuevos = [], sorted(actuales)
+        else:
+            heredados = sorted(actuales & fallos_previos)
+            nuevos = sorted(actuales - fallos_previos)
+        if actuales and not nuevos:
+            # Todos los FAIL ya estaban antes de tocar nada: revertir no limpia
+            # ninguno y bloquear dejaría al workspace atrapado en el método viejo
+            # (la misma trampa que el ADR-025 quitó del trabajo en vuelo).
+            print(f"\n    OJO: el linter sigue en rojo, pero sus {len(heredados)} fallo(s) "
+                  "ya estaban antes de actualizar. La actualización no los causó y se "
+                  "queda; conviene limpiarlos ya con el método al día.")
+        else:
+            verificar_recuperable(workspace, snapshot, publicado)
+            restaurar_rutas(workspace, snapshot)
+            (workspace / JOURNAL).unlink(missing_ok=True)
+            print("\n    ACTUALIZACIÓN REVERTIDA: solo se restauraron las rutas que esta "
+                  "ejecución había tocado.")
+            if not actuales:
+                print("    El linter terminó mal sin imprimir ningún FAIL (¿reventó?): "
+                      "no me fío de dejar la actualización puesta.")
+            elif fallos_previos is None:
+                print("    El linter falló y no había linter anterior con el que comparar, "
+                      "así que no puedo asegurar que el rojo no sea de la actualización.")
+            else:
+                print(f"    La actualización introdujo {len(nuevos)} fallo(s) que antes "
+                      "no estaban:")
+                for fallo in nuevos:
+                    print(f"      {fallo}")
+                if heredados:
+                    print(f"    (otros {len(heredados)} fallo(s) ya estaban antes: esos "
+                          "no los causó la actualización)")
+            return 1
 
     autoridad.assert_owner()
     gestion_leases.failpoint("actualizar_antes_stage_final")
@@ -925,6 +1017,42 @@ SALTAR = {"node_modules", "__pycache__", "Library", "Applications", ".git", ".ve
           "venv", "worktrees", "main", "dist", "build", ".Trash", "System", "vendor"}
 RAICES_HABITUALES = ("Project", "Projects", "Proyectos", "Developer", "dev", "code",
                      "Documents", "Desktop", "repos", "src", "work")
+
+
+def raiz_herramienta():
+    return Path(os.environ.get(
+        "INGENIERIA_REQUISITOS_HERRAMIENTA",
+        str(Path(__file__).resolve().parents[1]),
+    ))
+
+
+def desfase_herramienta():
+    """Cuántos commits va esta copia de la herramienta por detrás de su origin.
+
+    None si no se puede saber (sin git, sin remoto, sin red): eso jamás detiene nada.
+    Existe porque el método se reparte desde clones, y sin este aviso un usuario
+    puede pasarse semanas repartiendo un método viejo convencido de que actualiza."""
+    raiz = str(raiz_herramienta())
+    if os.environ.get("INGENIERIA_REQUISITOS_SIN_FETCH") != "1":
+        try:
+            subprocess.run(["git", "-C", raiz, "fetch", "--quiet"],
+                           capture_output=True, timeout=8)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    r = subprocess.run(["git", "-C", raiz, "rev-list", "--count", "HEAD..origin/main"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if r.returncode:
+        return None
+    salida = r.stdout.strip()
+    return int(salida) if salida.isdigit() else None
+
+
+def avisar_herramienta_vieja():
+    atras = desfase_herramienta()
+    if atras:
+        print(f"OJO: esta copia de la herramienta va {atras} commit(s) por detrás de su "
+              "origin.\nLo que repartas ahora será un método viejo: haz `git pull` aquí "
+              "antes de actualizar tus proyectos.\n")
 
 
 def es_workspace(ruta):
@@ -1037,6 +1165,9 @@ def main():
         grupo.add_argument("ruta", nargs="?", help="carpeta del workspace <proyecto>-agents")
         grupo.add_argument("--todos", action="store_true", help="todos los registrados")
     args = ap.parse_args()
+    if args.orden == "buscar" or getattr(args, "todos", False):
+        # Solo en las entradas "de campaña": una ruta suelta debe funcionar sin red.
+        avisar_herramienta_vieja()
     if args.orden == "buscar":
         return args.func(args)
 

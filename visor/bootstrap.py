@@ -45,6 +45,11 @@ import tempfile
 from json import load
 from pathlib import Path
 
+# Windows: la salida por PIPE hereda cp1252 y los acentos salen como mojibake.
+for _salida in (sys.stdout, sys.stderr):
+    if hasattr(_salida, "reconfigure"):
+        _salida.reconfigure(encoding="utf-8", errors="replace")
+
 BASE = Path(__file__).resolve().parent          # visor/
 PLANTILLA = BASE.parent / "plantilla"           # el molde del workspace
 
@@ -193,7 +198,9 @@ def comprobar_y_copiar_metodo(destino):
     """Copia solo el manifiesto público y falla si la plantilla contiene residuos."""
     origen = PLANTILLA / "docs" / "00-metodo"
     presentes = {
-        str(ruta.relative_to(origen))
+        # as_posix: en Windows relative_to da separadores \ y el manifiesto usa /;
+        # sin normalizar, todo "falta" y todo "sobra" a la vez (caso de campo, 09-08).
+        ruta.relative_to(origen).as_posix()
         for ruta in origen.rglob("*")
         if ruta.is_file() and not any(parte in IGNORAR for parte in ruta.parts)
     }
@@ -227,7 +234,9 @@ def huella_plantilla():
         piezas.append((nombre, PLANTILLA / nombre))
     for origen in sorted((PLANTILLA / "githooks").rglob("*")):
         if origen.is_file():
-            piezas.append((".githooks/" + str(origen.relative_to(PLANTILLA / "githooks")),
+            # as_posix: la huella debe ser idéntica en toda plataforma; con separador
+            # nativo, la calculada en Windows no casaba con ninguna (caso de campo, 09-08).
+            piezas.append((".githooks/" + origen.relative_to(PLANTILLA / "githooks").as_posix(),
                            origen))
     digest = hashlib.sha256()
     for nombre, ruta in sorted(piezas):
@@ -661,6 +670,9 @@ def montar_git(destino, nombre_codigo, titulo, remoto_codigo, remoto_meta):
     rc, out = git(destino, "init", "-b", "main")
     if rc != 0:
         morir(f"git init falló: {out}")
+    # El método compara BYTES (huellas sha256): este repo no convierte finales de
+    # línea jamás, aunque el global de la máquina diga otra cosa (Windows).
+    git(destino, "config", "core.autocrlf", "false")
     git(destino, "add", "AGENTS.md", "CLAUDE.md", "GEMINI.md", "README.md", "GUIA.md",
         "METODO.json",
         "setup.py", "repos.yaml", ".gitignore", "docs", "worktrees", ".github",
@@ -682,6 +694,7 @@ def montar_git(destino, nombre_codigo, titulo, remoto_codigo, remoto_meta):
         rc, out = git(main_dir, "init", "-b", "main")
         if rc != 0:
             morir(f"git init del repo de código falló: {out}")
+        git(main_dir, "config", "core.autocrlf", "false")
         # El repo de código nace LIMPIO: sin stack no hay suite, linter ni auditor de
         # dependencias reales. La primera unidad del esqueleto los materializa juntos.
         (main_dir / "README.md").write_text(

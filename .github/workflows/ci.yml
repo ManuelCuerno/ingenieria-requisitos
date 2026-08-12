@@ -7,12 +7,15 @@ on:
   schedule:
     - cron: "17 3 * * *"
 
+env:
+  # Los scripts del método emiten SIEMPRE UTF-8 (embudo de salida); la suite debe
+  # decodificar igual también en Windows, donde el default sería cp1252.
+  PYTHONUTF8: "1"
+
 jobs:
   tests:
     name: Tests (${{ matrix.os }} · py${{ matrix.python }})
     runs-on: ${{ matrix.os }}
-    # Windows no bloquea hasta cerrar la portabilidad (S2.6): quitar cuando pase.
-    continue-on-error: ${{ matrix.os == 'windows-latest' }}
     strategy:
       fail-fast: false
       matrix:

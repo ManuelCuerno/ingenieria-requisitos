@@ -4,11 +4,12 @@ import hashlib
 import json
 import os
 import re
-import select
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -20,11 +21,28 @@ ACTUALIZAR = RAIZ / "visor/actualizar.py"
 PROYECTOS = RAIZ / "visor/proyectos.py"
 
 
+def borrar_arbol(ruta):
+    """rmtree que borra también lo que git deja en solo-lectura (Windows)."""
+    def reintentar(func, objetivo, _exc):
+        os.chmod(objetivo, stat.S_IWRITE)
+        func(objetivo)
+    if sys.version_info >= (3, 12):
+        shutil.rmtree(ruta, onexc=reintentar)
+    else:
+        shutil.rmtree(ruta, onerror=reintentar)
+
+
+def borrar_tmp_silencioso(ruta):
+    """Cleanup del temporal de un test: en Windows un fichero recién reemplazado
+    por una escritura atómica puede seguir retenido; eso es ruido de cleanup, no
+    un fallo del test. (ignore_cleanup_errors de TemporaryDirectory es 3.10+.)"""
+    shutil.rmtree(ruta, ignore_errors=True)
+
+
 class PeticionBootstrapActualizarTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix="peticion-distribucion-")
-        self.addCleanup(self.tmp.cleanup)
-        self.base = Path(self.tmp.name)
+        self.base = Path(tempfile.mkdtemp(prefix="peticion-distribucion-"))
+        self.addCleanup(borrar_tmp_silencioso, self.base)
         self.entorno = dict(os.environ)
         self.entorno["INGENIERIA_REQUISITOS_REGISTRO"] = str(
             self.base / "registro-suite.json"
@@ -35,37 +53,54 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
             [sys.executable, str(script), *args],
             cwd=RAIZ,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             env=self.entorno,
         )
 
     def proceso_actualizar_con_failpoint(self, nombre, ws):
-        ready_read, ready_write = os.pipe()
-        wait_read, wait_write = os.pipe()
+        # Barrera por ficheros: los FDs no cruzan procesos en Windows (pass_fds
+        # es POSIX). El hijo toca `ready` al llegar y espera a que exista `gate`.
+        barrera = Path(tempfile.mkdtemp(prefix="barrera-"))
+        self.addCleanup(shutil.rmtree, barrera, True)
+        ready = barrera / "ready"
+        gate = barrera / "gate"
         env = os.environ.copy()
         prefijo = f"IR_FAILPOINT_{nombre.upper()}"
-        env[f"{prefijo}_READY_FD"] = str(ready_write)
-        env[f"{prefijo}_WAIT_FD"] = str(wait_read)
+        env[f"{prefijo}_READY_FILE"] = str(ready)
+        env[f"{prefijo}_WAIT_FILE"] = str(gate)
         env["IR_SESSION_ID"] = f"modo-d-{uuid.uuid4()}"
         proceso = subprocess.Popen(
             [sys.executable, str(ACTUALIZAR), "aplicar", str(ws)],
             cwd=RAIZ,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,
-            pass_fds=(ready_write, wait_read),
         )
-        os.close(ready_write)
-        os.close(wait_read)
         self.addCleanup(lambda: proceso.poll() is None and proceso.kill())
-        return proceso, ready_read, wait_write
+        self._proceso = proceso
+        return proceso, ready, gate
 
-    def esperar_barrera(self, descriptor):
-        legibles, _, _ = select.select([descriptor], [], [], 3)
-        self.assertEqual(legibles, [descriptor], "Modo D no alcanzó el failpoint")
-        self.assertEqual(os.read(descriptor, 1), b"1")
-        os.close(descriptor)
+    def esperar_barrera(self, ready, timeout=20):
+        # 20 s: en Windows el CI arranca un intérprete nuevo y hace todo el
+        # trabajo de Modo D hasta el failpoint; 3 s no le llegaban.
+        proceso = getattr(self, "_proceso", None)
+        limite = time.monotonic() + timeout
+        while time.monotonic() < limite:
+            if ready.exists():
+                return
+            if proceso is not None and proceso.poll() is not None:
+                salida, err = proceso.communicate()
+                self.fail(f"Modo D murió antes del failpoint: {salida}{err}")
+            time.sleep(0.01)
+        self.fail("Modo D no alcanzó el failpoint")
+
+    def abrir_barrera(self, gate):
+        gate.write_text("1", encoding="ascii")
 
     def entrada_journal(self, contenido, modo=0o644):
         return {
@@ -181,6 +216,7 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         externo = self.base / "codigo-externo"
         externo.mkdir()
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=externo, check=True)
+        subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=externo, check=True)
         repos = destino / "repos.yaml"
         original = repos.read_text(encoding="utf-8")
         repos.write_text(
@@ -199,7 +235,7 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         repos.write_text(original, encoding="utf-8")
         main = destino / "main"
         if main.is_dir() and not main.is_symlink():
-            shutil.rmtree(main)
+            borrar_arbol(main)
         main.symlink_to(externo, target_is_directory=True)
         lint_symlink = self.ejecutar(destino / "docs/00-metodo/scripts/lint_metodo.py")
         self.assertNotEqual(lint_symlink.returncode, 0, lint_symlink.stdout + lint_symlink.stderr)
@@ -261,6 +297,7 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
                 json.dumps({"titulo": nombre}), encoding="utf-8"
             )
             subprocess.run(["git", "init", "-q", "-b", "main"], cwd=workspace, check=True)
+            subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=workspace, check=True)
             subprocess.run(
                 [
                     "git",
@@ -368,6 +405,7 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
                 encoding="utf-8",
             )
         subprocess.run(["git", "init", "-b", "main"], cwd=ws, check=True, capture_output=True)
+        subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=ws, check=True)
         subprocess.run(["git", "config", "user.name", "Test"], cwd=ws, check=True)
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"], cwd=ws, check=True
@@ -436,6 +474,28 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         ).stdout
         self.assertIn("launcher antiguo", recuperable)
 
+    def test_colision_tardia_detecta_edicion_en_ruta_del_metodo(self):
+        """P0 de la revisión adversarial: una edición sin commitear en una ruta que
+        Modo D va a sobrescribir, aparecida tras declararse el árbol limpio, se detecta
+        antes de escribir y no se pierde."""
+        if str(RAIZ / "visor") not in sys.path:
+            sys.path.insert(0, str(RAIZ / "visor"))
+        import actualizar
+
+        ws = self.workspace_antiguo(con_trabajo=False)
+        rutas_tocadas = ["AGENTS.md", "docs/00-metodo/scripts/lint_metodo.py"]
+
+        # Árbol limpio: sin colisión.
+        self.assertEqual(actualizar.colision_tardia(ws, rutas_tocadas), [])
+
+        # El usuario edita AGENTS.md sin commitear (la ventana del linter).
+        (ws / "AGENTS.md").write_text("# EDICIÓN DEL USUARIO\n", encoding="utf-8")
+        self.assertEqual(
+            actualizar.colision_tardia(ws, rutas_tocadas), ["AGENTS.md"]
+        )
+        # Una edición fuera de las rutas del método no colisiona.
+        self.assertEqual(actualizar.colision_tardia(ws, ["docs/otro.md"]), [])
+
     def test_actualizar_revierte_rutas_si_el_linter_falla(self):
         ws = self.workspace_antiguo(con_trabajo=False)
         (ws / "codebase").mkdir()
@@ -483,6 +543,7 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         externo = self.base / "repo-externo-modo-d"
         externo.mkdir()
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=externo, check=True)
+        subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=externo, check=True)
         (ws / "main").symlink_to(externo, target_is_directory=True)
         (ws / "repos.yaml").write_text(
             "codigo:\n  ruta_local: main/\n  rama_principal: main\n",
@@ -519,8 +580,7 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         self.esperar_barrera(ready)
         ajeno = ws / "docs/05-trabajo/nota-ajena.md"
         ajeno.write_text("trabajo de otra sesión\n", encoding="utf-8")
-        os.write(gate, b"1")
-        os.close(gate)
+        self.abrir_barrera(gate)
         salida, error = proceso.communicate(timeout=10)
 
         self.assertEqual(proceso.returncode, 0, salida + error)
@@ -599,7 +659,7 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         subprocess.run(["git", "push", "-u", "origin", "main"], cwd=ws,
                        check=True, capture_output=True)
         otro = self.base / "otro-host"
-        subprocess.run(["git", "clone", "-b", "main", remoto, otro],
+        subprocess.run(["git", "clone", "-c", "core.autocrlf=false", "-b", "main", remoto, otro],
                        check=True, capture_output=True)
         subprocess.run(["git", "config", "user.name", "Otro"], cwd=otro, check=True)
         subprocess.run(["git", "config", "user.email", "otro@example.com"], cwd=otro,
@@ -628,7 +688,7 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         proceso.kill()
         proceso.wait(timeout=3)
         proceso.communicate()
-        os.close(gate)
+        self.abrir_barrera(gate)
         journal = ws / ".runtime/transactions/modo-d.json"
         self.assertTrue(journal.is_file())
 
@@ -658,7 +718,7 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         proceso.kill()
         proceso.wait(timeout=3)
         proceso.communicate()
-        os.close(gate)
+        self.abrir_barrera(gate)
         journal = ws / ".runtime/transactions/modo-d.json"
         self.assertTrue(journal.is_file())
 
@@ -752,7 +812,7 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         proceso.kill()
         proceso.wait(timeout=3)
         proceso.communicate()
-        os.close(gate)
+        self.abrir_barrera(gate)
 
         self.assertFalse(destino.exists())
         self.assertTrue((ws / ".runtime/transactions/modo-d.json").is_file())
@@ -769,8 +829,7 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         self.esperar_barrera(ready)
         ajeno = b"cambio concurrente en la misma ruta\n"
         (ws / "AGENTS.md").write_bytes(ajeno)
-        os.write(gate, b"1")
-        os.close(gate)
+        self.abrir_barrera(gate)
         salida, error = proceso.communicate(timeout=10)
 
         self.assertNotEqual(proceso.returncode, 0, salida + error)
@@ -810,8 +869,7 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         self.assertEqual(blob_stageado, esperado)
         ajeno = b"cambio despues del stage exacto\n"
         (ws / "AGENTS.md").write_bytes(ajeno)
-        os.write(gate, b"1")
-        os.close(gate)
+        self.abrir_barrera(gate)
         salida, error = proceso.communicate(timeout=10)
 
         self.assertNotEqual(proceso.returncode, 0, salida + error)

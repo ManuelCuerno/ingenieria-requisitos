@@ -25,6 +25,11 @@ from pathlib import Path
 
 import control_plane
 
+# Windows: la salida por PIPE hereda cp1252 y los acentos salen como mojibake.
+for _salida in (sys.stdout, sys.stderr):
+    if hasattr(_salida, "reconfigure"):
+        _salida.reconfigure(encoding="utf-8", errors="replace")
+
 SEVERIDADES = ("P0", "P1", "P2", "nota")
 # Campos sin los cuales un incidente no cuenta nada. Las líneas v1 no llevan severidad ni
 # version_metodo y siguen siendo válidas: solo se exige lo que siempre existió.

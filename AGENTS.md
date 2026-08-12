@@ -53,6 +53,7 @@ files) de su aplicación, con una web local para que los valide mirando.
    `visor/compilar.py` (la documentación completa de la aplicación),
    `visor/bootstrap.py` (monta el workspace de trabajo completo desde los
    planos: meta-repo + repo de código, con el método de `plantilla/`) y
-   `visor/actualizar.py` (Modo D: reparte el método con punto de retorno) y
+   `visor/actualizar.py` (Modo D: reparte el método con punto de retorno),
    `visor/migrar_skills.py` (saca del descubrimiento skills locales de proceso sin borrarlas;
-   las técnicas solo se conservan mediante `--permitir`).
+   las técnicas solo se conservan mediante `--permitir`) y
+   `visor/doctor.py` (primer arranque: ¿funciona la herramienta en esta máquina?).

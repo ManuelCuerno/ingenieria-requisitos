@@ -49,9 +49,14 @@ divergencia remota, pero no existe un lease distribuido. Añadir CAS remoto requ
 servicio autoritativo y queda fuera hasta poder hacerlo sin depender de configuración privada
 de un harness.
 
-Los failpoints `IR_FAILPOINT_*_{READY,WAIT}_FD` solo actúan si un test les pasa descriptores;
-permiten detener procesos en la ventana exacta sin esperas temporales ni comportamiento en
-producción.
+Los failpoints `IR_FAILPOINT_*_{READY,WAIT}_FD` (descriptores, POSIX) y
+`IR_FAILPOINT_*_{READY,WAIT}_FILE` (ficheros, cualquier plataforma: en Windows los FDs no
+cruzan procesos) solo actúan si un test define esas variables; permiten detener procesos en
+la ventana exacta sin esperas temporales ni comportamiento en producción.
+
+El cierre de una unidad (`unidad.py cerrar`) toma `unit:<NNN-slug>` y `git-index` mientras
+reescribe fichas, archiva y reconcilia: un Modo D o un despacho concurrentes fallan nombrando
+al propietario en vez de mezclar escrituras.
 
 ## Consecuencias
 

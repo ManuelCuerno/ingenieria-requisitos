@@ -713,6 +713,35 @@ def escribir_recibo_preparacion(destino, estado, hook=None, hook_sha256=None,
     return ruta
 
 
+def _which_sin_cwd(programa):
+    """shutil.which pero SIN el directorio actual, que en Windows se antepone al
+    PATH: si no, un bash.exe versionado en el repo de código (que suele ser el cwd)
+    ganaría al bash de Git for Windows y se ejecutaría fuera de todo control."""
+    rutas = os.environ.get("PATH", os.defpath).split(os.pathsep)
+    cwd = os.path.abspath(os.getcwd())
+    limpias = [r for r in rutas if r and os.path.abspath(r) != cwd]
+    return shutil.which(programa, path=os.pathsep.join(limpias))
+
+
+def orden_para_hook(gancho):
+    """En POSIX el shebang ejecuta el hook solo; en Windows el shebang no existe:
+    si el hook lo trae se ejecuta vía bash (viene con Git for Windows), y si no hay
+    bash se dice en claro en vez de morir con WinError 193."""
+    if gancho.suffix == ".py":
+        return [sys.executable, str(gancho)]
+    if os.name == "nt":
+        with open(gancho, "rb") as stream:
+            if stream.read(2) == b"#!":
+                bash = _which_sin_cwd("bash")
+                if not bash:
+                    raise OSError(
+                        "en Windows este hook necesita bash (Git for Windows) "
+                        "o un worktree-listo.py"
+                    )
+                return [bash, str(gancho)]
+    return [str(gancho)]
+
+
 def preparar_worktree(destino):
     """Ejecuta, si existe, el gancho explícito del proyecto y devuelve si permite despachar.
 
@@ -787,9 +816,9 @@ def preparar_worktree(destino):
         fail(f"preparación bloqueada: {nombre} no es ejecutable; recibo {rel(ruta)}")
         return False
     huella = hashlib.sha256(gancho.read_bytes()).hexdigest()
-    orden = [sys.executable, str(gancho)] if gancho.suffix == ".py" else [str(gancho)]
     print(f"\n  Preparando el entorno del worktree con {nombre}…", flush=True)
     try:
+        orden = orden_para_hook(gancho)
         codigo = subprocess.run(
             [*orden, str(destino_real)], cwd=str(destino_real), shell=False, close_fds=True
         ).returncode
@@ -1035,8 +1064,12 @@ def _cmd_despachar(args, autoridad, snapshot=None):
             ok(f"nivel de test declarado: {nivel[:60]}")
 
     # --- Precondición 5: trabajo en vuelo (regla 5: UNA unidad por defecto) ------------------
+    # Las documentales quedan fuera del censo de vuelo: la regla 5 lo dice («las --documental
+    # tampoco: pueden ir en paralelo») y contarlas bloqueaba despachos legítimos por tope
+    # (caso de campo, 05-08: una auditoría documental aparcada consumía cupo de constructor).
     activas = sorted(n for n, u in censo().items()
-                     if n != nombre and u["fm"].get("estado") in EN_VUELO)
+                     if n != nombre and u["fm"].get("estado") in EN_VUELO
+                     and (u["fm"].get("ejecucion") or "").strip() != "documental")
     if activas and not args.paralelo:
         fail(f"ya hay {len(activas)} unidad(es) en vuelo: {', '.join(activas)}")
         err(f"\n  Regla 5: UNA unidad en vuelo por defecto — el límite real es la atención, no\n"
@@ -1362,8 +1395,32 @@ def rama_mergeada(repo, rama, principal, fusion_declarada=""):
         if git(repo, "merge-base", "--is-ancestor", sha, base, silencioso=True)[0] == 0:
             return True, f"{etiqueta} está dentro de {base} ({sha[:8]})", True, sha
 
-    # Ninguna referencia viva es ancestro de la principal. Antes de bloquear, la huella del
-    # squash: el método exige NNN-slug en el título del PR, y el squash lo hereda como asunto.
+    # Ninguna referencia viva es ancestro de la principal. La huella FUERTE de un squash:
+    # algún commit de la principal desde la base común tiene EXACTAMENTE el mismo árbol que
+    # la punta de la unidad. No depende de cómo se titulara el PR — los PR de campo se
+    # titulan «044: …» sin el slug entero y el grep de abajo no los ve, con el trabajo ya
+    # dentro (visto en cinco unidades de un mismo proyecto, 04-08). Verificarlo a mano era `git diff <rama> <sha>`
+    # vacío; esto es esa misma comprobación, commit a commit.
+    for sha, etiqueta in vivos:
+        codigo, arbol = git(repo, "rev-parse", f"{sha}^{{tree}}", silencioso=True)
+        if codigo != 0:
+            continue
+        codigo, mb = git(repo, "merge-base", sha, base, silencioso=True)
+        if codigo != 0:
+            continue
+        codigo, salida = git(repo, "log", base, f"^{mb.strip()}", "--format=%H %T",
+                             silencioso=True)
+        if codigo != 0:
+            continue
+        for linea in salida.splitlines():
+            csha, _, carbol = linea.strip().partition(" ")
+            if carbol.strip() == arbol.strip():
+                return True, (f"{base} contiene el commit {csha[:8]} con el MISMO árbol que "
+                              f"{etiqueta}: el trabajo completo está dentro (huella de squash "
+                              f"merge), se titulara como se titulara el PR"), True, csha
+
+    # Y como último recurso, la huella DÉBIL del squash: el método exige NNN-slug en el
+    # título del PR, y el squash lo hereda como asunto.
     codigo, salida = git(repo, "log", base, f"--grep={rama}", "--format=%H %s", "-1",
                          silencioso=True)
     if codigo == 0 and salida.strip():
@@ -1442,6 +1499,30 @@ def cmd_cerrar(args):
     if not RE_UNIDAD.match(nombre):
         fail(f"'{nombre}' no tiene forma NNN-slug (tres dígitos, guion, slug)")
         return 1
+    # ADR-023: el cierre reescribe fichas, archiva y deja el metarrepo listo para
+    # commitear — toma la unidad y `git-index` para no cruzarse con Modo D ni con
+    # un despacho de la misma unidad en otra sesión.
+    manager = gestion_leases.LeaseManager(RAIZ)
+    # El except cubre SOLO la adquisición: si el cuerpo del cierre completa y luego
+    # el release tropieza (registro corrupto a media ejecución), no se puede reportar
+    # "bloqueado" sobre un cierre que ya archivó y reconcilió.
+    try:
+        grupo = manager.acquire((f"unit:{nombre}", "git-index"))
+    except gestion_leases.LeaseError as exc:
+        fail(f"cierre bloqueado: otra sesión tiene la unidad o el índice ({exc})")
+        return 1
+    try:
+        grupo.assert_owner()
+        return _cerrar_bajo_lease(args, nombre, grupo)
+    finally:
+        try:
+            grupo.release()
+        except gestion_leases.LeaseError as exc:
+            warn(f"el lease del cierre no se liberó limpiamente ({exc}); otra sesión lo "
+                 "reclamará cuando este proceso muera")
+
+
+def _cerrar_bajo_lease(args, nombre, autoridad):
     unidad = buscar_unidad(nombre)
     if unidad is None:
         fail(f"no existe la unidad {nombre} (¿ya está cerrada y archivada?)")
@@ -1661,6 +1742,16 @@ def cmd_cerrar(args):
         ok(f"OK del usuario escrito en {rel(hallazgos)}")
     else:
         ok(f"ruta {politica.name}: OK de usuario no aplica")
+
+    # ADR-023: revalidar la autoridad JUSTO antes de la primera escritura irreversible.
+    # Todo lo anterior fue lectura y verificación; de aquí en adelante se muta el
+    # metarrepo (estado, archivado, worktree). Un fencing perdido en la ventana entre
+    # el assert inicial y aquí (el linter tarda) bloquea esta escritura, no la consuma.
+    try:
+        autoridad.assert_owner()
+    except gestion_leases.LeaseError as exc:
+        fail(f"cierre abortado antes de tocar nada: se perdió la autoridad del lease ({exc})")
+        return 1
 
     texto = leer_fichero_unidad(ruta)
     texto = re.sub(r"^estado:\s*\S+", "estado: mergeada", texto, count=1, flags=re.M)

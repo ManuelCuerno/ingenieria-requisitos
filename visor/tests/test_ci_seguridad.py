@@ -200,6 +200,8 @@ class ContratoCITest(unittest.TestCase):
         return subprocess.run(
             [sys.executable, str(LINT_CI), "--repo", str(repo), *opciones],
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             env=self.git_env,
         )
@@ -316,6 +318,8 @@ class ContratoCITest(unittest.TestCase):
             [sys.executable, str(workspace / "docs/00-metodo/scripts/lint_deploy.py")],
             cwd=workspace,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             env=self.git_env,
         )
@@ -1156,7 +1160,7 @@ class ContratoCITest(unittest.TestCase):
     def escribir_manifiesto_metodo(self, workspace):
         base = workspace / "docs" / "00-metodo"
         archivos = sorted(
-            str(ruta.relative_to(workspace))
+            ruta.relative_to(workspace).as_posix()
             for ruta in base.rglob("*")
             if ruta.is_file()
             and "__pycache__" not in ruta.parts
@@ -1173,6 +1177,8 @@ class ContratoCITest(unittest.TestCase):
             [sys.executable, str(workspace / "docs/00-metodo/scripts/lint_metodo.py")],
             cwd=workspace,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             env=self.git_env,
         )

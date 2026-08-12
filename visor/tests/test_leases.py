@@ -210,7 +210,7 @@ class LeaseTests(unittest.TestCase):
         llamadas = []
 
         class MsvcrtDoble:
-            LK_LOCK = "LK_LOCK"
+            LK_NBLCK = "LK_NBLCK"
             LK_UNLCK = "LK_UNLCK"
 
             @staticmethod
@@ -221,7 +221,9 @@ class LeaseTests(unittest.TestCase):
         self.lease.msvcrt = MsvcrtDoble
         adquirido = self.manager("sesion-a").acquire("unit:004")
         adquirido.release()
-        self.assertIn("LK_LOCK", llamadas)
+        # LK_NBLCK (sondeo no bloqueante con reintento), no LK_LOCK: ese abandona
+        # a los ~10 s con EDEADLK y su OSError no lo captura ningún llamador.
+        self.assertIn("LK_NBLCK", llamadas)
         self.assertIn("LK_UNLCK", llamadas)
         candado = self.workspace / ".runtime/leases/coordinator.lock"
         self.assertTrue(candado.is_file())

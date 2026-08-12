@@ -6,11 +6,18 @@ import contextlib
 import json
 import os
 import subprocess
+import sys
 import tempfile
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import bootstrap
+
+# Windows: la salida por PIPE hereda cp1252 y los acentos salen como mojibake.
+for _salida in (sys.stdout, sys.stderr):
+    if hasattr(_salida, "reconfigure"):
+        _salida.reconfigure(encoding="utf-8", errors="replace")
 
 RAIZ = Path(__file__).resolve().parent.parent
 REGISTRO = Path(
@@ -40,8 +47,25 @@ def bloqueo_registro():
             if os.fstat(descriptor).st_size == 0:
                 os.write(descriptor, b"0")
             os.lseek(descriptor, 0, os.SEEK_SET)
-            msvcrt.locking(descriptor, msvcrt.LK_LOCK, 1)
-            liberar = lambda: msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+            # LK_LOCK abandona a los ~10 s con EDEADLK; varios procesos registrando a
+            # la vez pueden esperar más. Se sondea sin bloquear hasta un límite ancho.
+            limite = time.monotonic() + 60
+            while True:
+                try:
+                    msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+                    break
+                except OSError:
+                    if time.monotonic() >= limite:
+                        raise SystemExit(
+                            "No pude obtener el candado del registro en 60 s; "
+                            "¿otro proceso lo tiene retenido?"
+                        )
+                    time.sleep(0.05)
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+
+            def liberar():
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
         try:
             yield
         finally:

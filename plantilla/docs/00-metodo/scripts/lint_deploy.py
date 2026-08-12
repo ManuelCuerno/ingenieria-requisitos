@@ -17,7 +17,9 @@ deshace, qué datos hay que salvar y dónde se mira si falla.
 
 Sin dependencias: solo stdlib. El disco es la verdad; este script solo la comprueba.
 """
+import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -105,9 +107,24 @@ def ejecutar_control(nombre, ruta, cwd):
     logs = RAIZ / ".runtime" / "pre-deploy"
     logs.mkdir(parents=True, exist_ok=True)
     destino = logs / f"{ruta.name}.log"
+    orden = [str(ruta)]
+    if os.name == "nt":
+        # Windows no entiende el shebang: los scripts de gate corren vía bash
+        # (viene con Git for Windows) o el gate lo dice en claro.
+        try:
+            with open(ruta, "rb") as stream:
+                lleva_shebang = stream.read(2) == b"#!"
+        except OSError:
+            lleva_shebang = False
+        if lleva_shebang:
+            bash = shutil.which("bash")
+            if not bash:
+                fail(f"en Windows {nombre} necesita bash (Git for Windows)")
+                return
+            orden = [bash, str(ruta)]
     try:
         resultado = subprocess.run(
-            [str(ruta)], cwd=str(cwd), capture_output=True, text=True,
+            orden, cwd=str(cwd), capture_output=True, text=True,
             encoding="utf-8", errors="replace", check=False,
         )
     except OSError as exc:

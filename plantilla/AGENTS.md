@@ -5,6 +5,9 @@ método. El código vive en otro repo, `main/` (solo lectura), y se trabaja en `
 
 ## Al arrancar (haz esto antes que nada)
 
+0. **Solo-consulta arranca ligero.** ¿La petición solo LEE (una duda, enseñar el estado,
+   explicar algo del proyecto)? Salta el arranque y responde con el router de abajo, sin
+   declarar rol. En cuanto la sesión vaya a escribir o ejecutar algo, arranque completo (1-4).
 1. **Actualiza el taller:** ejecuta `setup.py` con el Python disponible. Esto coloca
    `main/` en la última `origin/main` mediante fast-forward; si no puede, PARA y explica
    por qué. Nunca trabajes desde una referencia remota antigua.

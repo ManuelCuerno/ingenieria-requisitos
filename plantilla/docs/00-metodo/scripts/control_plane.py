@@ -168,9 +168,14 @@ class _SalidaRedactada:
 
 
 def redactar_salidas():
-    """Instala el redactor en stdout y stderr del proceso (idempotente)."""
+    """Instala el redactor en stdout y stderr del proceso (idempotente).
+
+    De paso fija UTF-8: en Windows un PIPE hereda cp1252 y cualquier `·` o `→`
+    sale como mojibake (o mata el proceso con UnicodeEncodeError)."""
     for nombre in ("stdout", "stderr"):
         actual = getattr(sys, nombre)
+        if hasattr(actual, "reconfigure"):
+            actual.reconfigure(encoding="utf-8", errors="replace")
         if not isinstance(actual, _SalidaRedactada):
             setattr(sys, nombre, _SalidaRedactada(actual))
 

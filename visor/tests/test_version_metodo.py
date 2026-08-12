@@ -30,6 +30,8 @@ class VersionMetodoTest(unittest.TestCase):
             [sys.executable, str(script), *args],
             cwd=RAIZ,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
             env=self.entorno,
         )
@@ -83,6 +85,7 @@ class VersionMetodoTest(unittest.TestCase):
             '{"version": 2, "titulo": "Antiguo"}\n', encoding="utf-8"
         )
         subprocess.run(["git", "init", "-b", "main"], cwd=ws, check=True, capture_output=True)
+        subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=ws, check=True)
         subprocess.run(["git", "config", "user.name", "Test"], cwd=ws, check=True)
         subprocess.run(
             ["git", "config", "user.email", "test@example.com"], cwd=ws, check=True
@@ -95,6 +98,18 @@ class VersionMetodoTest(unittest.TestCase):
             capture_output=True,
         )
         return ws
+
+    def commitear(self, ws, mensaje):
+        subprocess.run(["git", "add", "-A"], cwd=ws, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", mensaje], cwd=ws, check=True, capture_output=True
+        )
+
+    def plantar_fail_estable(self, ws):
+        """Una ficha sin frontmatter: FAIL determinista que aplicar no repara."""
+        carpeta = ws / "docs/05-trabajo/001-demo"
+        carpeta.mkdir(parents=True, exist_ok=True)
+        (carpeta / "especificacion.md").write_text("sin frontmatter\n", encoding="utf-8")
 
     def test_version_declarada_es_semver(self):
         self.assertRegex(self.version, r"^\d+\.\d+\.\d+$")
@@ -145,6 +160,188 @@ class VersionMetodoTest(unittest.TestCase):
         self.assertIn("docs/bugs/INDICE.md", commiteados)
         lint = self.ejecutar(ws / "docs/00-metodo/scripts/lint_metodo.py")
         self.assertEqual(lint.returncode, 0, lint.stdout + lint.stderr)
+
+    def test_aplicar_no_revierte_por_fallos_heredados_del_linter(self):
+        """Caso de campo (03-08): el rojo ya estaba y la actualización cargó
+        con la culpa. Un FAIL idéntico antes y después NO puede revertir el update:
+        revertirlo no limpia nada y deja al workspace atrapado en el método viejo."""
+        ws = self.workspace_antiguo()
+        primera = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+        self.assertEqual(primera.returncode, 0, primera.stdout + primera.stderr)
+        self.plantar_fail_estable(ws)
+        # Y hay método pendiente de publicar: un runbook se perdió.
+        (ws / "docs/00-metodo/runbooks/expres.md").unlink()
+        self.commitear(ws, "ficha rota y runbook perdido")
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertIn("ya estaban antes de actualizar", resultado.stdout)
+        self.assertNotIn("REVERTIDA", resultado.stdout)
+        # La actualización se quedó: el runbook volvió.
+        self.assertTrue((ws / "docs/00-metodo/runbooks/expres.md").is_file())
+
+    def test_aplicar_revierte_si_la_actualizacion_introduce_fallos_nuevos(self):
+        """El linter que llega con el update es más estricto que el del workspace:
+        eso SÍ revierte, y el mensaje señala los fallos nuevos como causa."""
+        ws = self.workspace_antiguo()
+        primera = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+        self.assertEqual(primera.returncode, 0, primera.stdout + primera.stderr)
+        self.plantar_fail_estable(ws)
+        # El linter "viejo" del workspace era más permisivo: verde siempre.
+        linter = ws / "docs/00-metodo/scripts/lint_metodo.py"
+        linter.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
+        self.commitear(ws, "linter permisivo y ficha rota")
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertEqual(resultado.returncode, 1, resultado.stdout + resultado.stderr)
+        self.assertIn("REVERTIDA", resultado.stdout)
+        self.assertIn("introdujo", resultado.stdout)
+        self.assertIn("sin frontmatter válido", resultado.stdout)
+        # El revert devolvió al workspace SU linter, no el de la plantilla.
+        self.assertIn("sys.exit(0)", linter.read_text(encoding="utf-8"))
+
+    def test_aplicar_sin_linter_previo_revierte_ante_cualquier_fallo(self):
+        """Sin línea base no se puede jurar de quién es el rojo: conservador, revierte."""
+        ws = self.workspace_antiguo()
+        self.plantar_fail_estable(ws)
+        self.commitear(ws, "ficha rota en workspace sin linter")
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertEqual(resultado.returncode, 1, resultado.stdout + resultado.stderr)
+        self.assertIn("REVERTIDA", resultado.stdout)
+        self.assertIn("no había linter anterior", resultado.stdout)
+
+    def herramienta_clonada(self):
+        """Un 'origin' local de la herramienta y su clon; devuelve (origen, clon)."""
+        origen = self.base / "herramienta-origen"
+        origen.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=origen, check=True,
+                       capture_output=True)
+        subprocess.run(["git", "config", "core.autocrlf", "false"], cwd=origen, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=origen, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"],
+                       cwd=origen, check=True)
+        (origen / "METODO.txt").write_text("v1\n", encoding="utf-8")
+        self.commitear(origen, "método v1")
+        clon = self.base / "herramienta-clon"
+        subprocess.run(["git", "clone", "-c", "core.autocrlf=false", str(origen), str(clon)], check=True,
+                       capture_output=True)
+        return origen, clon
+
+    def test_revisar_todos_avisa_si_la_herramienta_va_por_detras(self):
+        """Caso de campo (03→10 ago): 7 proyectos una semana con el método
+        viejo sin que nada avisara. Quien reparte tiene que enterarse de que va viejo."""
+        origen, clon = self.herramienta_clonada()
+        (origen / "METODO.txt").write_text("v2\n", encoding="utf-8")
+        self.commitear(origen, "método v2")
+        (origen / "METODO.txt").write_text("v3\n", encoding="utf-8")
+        self.commitear(origen, "método v3")
+        self.entorno["INGENIERIA_REQUISITOS_HERRAMIENTA"] = str(clon)
+
+        resultado = self.ejecutar(ACTUALIZAR, "revisar", "--todos")
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertIn("2 commit(s) por detrás", resultado.stdout)
+        self.assertIn("git pull", resultado.stdout)
+
+    def test_revisar_todos_no_avisa_si_la_herramienta_esta_al_dia(self):
+        _, clon = self.herramienta_clonada()
+        self.entorno["INGENIERIA_REQUISITOS_HERRAMIENTA"] = str(clon)
+
+        resultado = self.ejecutar(ACTUALIZAR, "revisar", "--todos")
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertNotIn("por detrás", resultado.stdout)
+
+    def test_revisar_una_ruta_no_toca_la_red_ni_avisa(self):
+        """Una ruta suelta debe funcionar offline: sin fetch y sin aviso."""
+        origen, clon = self.herramienta_clonada()
+        (origen / "METODO.txt").write_text("v2\n", encoding="utf-8")
+        self.commitear(origen, "método v2")
+        self.entorno["INGENIERIA_REQUISITOS_HERRAMIENTA"] = str(clon)
+        ws = self.workspace_antiguo()
+
+        resultado = self.ejecutar(ACTUALIZAR, "revisar", str(ws))
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertNotIn("por detrás", resultado.stdout)
+        # Y el clon sigue sin enterarse del avance: nadie hizo fetch a sus espaldas.
+        cuenta = subprocess.run(
+            ["git", "-C", str(clon), "rev-list", "--count", "HEAD..origin/main"],
+            text=True, capture_output=True, check=True,
+        ).stdout.strip()
+        self.assertEqual(cuenta, "0")
+
+    def test_huella_estado_colapsa_el_modo_en_windows(self):
+        """Caso de campo (09-08): Windows relee 0o644/0o755 como 0o666 y el fichero que
+        Modo D acababa de escribir pasaba por "trabajo ajeno". En Windows el modo se
+        colapsa a escribible/solo-lectura; en POSIX sigue contando entero."""
+        sys.path.insert(0, str(RAIZ / "visor"))
+        import actualizar
+        from unittest import mock
+
+        # En POSIX el modo distingue: 644 y 666 son huellas distintas.
+        with mock.patch("os.name", "posix"):
+            self.assertNotEqual(
+                actualizar.huella_estado((b"x", 0o100644)),
+                actualizar.huella_estado((b"x", 0o100666)),
+            )
+        with mock.patch("os.name", "nt"):
+            self.assertEqual(
+                actualizar.huella_estado((b"x", 0o100644)),
+                actualizar.huella_estado((b"x", 0o100666)),
+            )
+            self.assertEqual(
+                actualizar.huella_estado((b"x", 0o100755)),
+                actualizar.huella_estado((b"x", 0o100666)),
+            )
+            # Solo-lectura sigue siendo distinguible de escribible.
+            self.assertNotEqual(
+                actualizar.huella_estado((b"x", 0o100444)),
+                actualizar.huella_estado((b"x", 0o100666)),
+            )
+            # Y el contenido sigue mandando: mismo modo, bytes distintos.
+            self.assertNotEqual(
+                actualizar.huella_estado((b"x", 0o100644)),
+                actualizar.huella_estado((b"y", 0o100644)),
+            )
+
+    def test_manifiesto_y_huella_usan_rutas_posix(self):
+        """Caso de campo (09-08): el manifiesto es POSIX y el disco se recorría con
+        separador nativo — en Windows todo faltaba y sobraba a la vez, y la huella de la
+        plantilla no casaba con ninguna. Contrato: nada de backslashes en ninguna pieza."""
+        sys.path.insert(0, str(RAIZ / "visor"))
+        import bootstrap
+
+        for relativo in bootstrap.manifiesto_metodo():
+            self.assertNotIn("\\", relativo)
+        # La verificación real de publicabilidad la ejercita el CI de Windows; aquí el
+        # contrato local: la huella se calcula y es estable (sin depender del separador).
+        self.assertTrue(bootstrap.huella_plantilla())
+
+    def test_runbook_modo_d_no_invita_a_push_sin_autoridad(self):
+        """Incidente de campo (P1, 06-08): un agente en Modo D publicó en un remoto ajeno.
+        El runbook decía 'un git push y listo'. Contrato: en la sección del Modo D,
+        ninguna mención a git push sin exigir el OK explícito del dueño en el mismo
+        párrafo."""
+        runbook = (RAIZ / "RUNBOOK.md").read_text(encoding="utf-8")
+        inicio = runbook.index("## Modo D")
+        fin = runbook.index("## ", inicio + 1)
+        seccion = runbook[inicio:fin]
+        parrafos_con_push = [
+            p for p in seccion.split("\n\n") if "git push" in p or "`push`" in p
+        ]
+        self.assertTrue(parrafos_con_push, "el Modo D ya no documenta el push: revisa el test")
+        for parrafo in parrafos_con_push:
+            self.assertIn(
+                "OK explícito",
+                " ".join(parrafo.split()),
+                "el Modo D menciona git push sin exigir el OK explícito del dueño:\n"
+                + parrafo,
+            )
 
     def test_aplicar_no_repone_esqueleto_sobre_carpeta_existente(self):
         ws = self.workspace_antiguo()

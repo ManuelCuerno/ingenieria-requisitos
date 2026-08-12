@@ -16,6 +16,14 @@ LAUNCHER = RAIZ / "plantilla/docs/00-metodo/scripts/ejecucion.py"
 WORKSPACE_PATHS = RAIZ / "plantilla/docs/00-metodo/scripts/workspace_paths.py"
 
 
+
+SOLO_POSIX = unittest.skipIf(
+    os.name == "nt",
+    "E2E con sandbox POSIX (srt/seatbelt/bwrap): en Windows no existe mecanismo "
+    "confiable y lanzar rechaza limpio — eso sí se prueba en "
+    "test_rechaza_sandbox_ausente_sin_bypass",
+)
+
 class ControlPlaneE2ETest(unittest.TestCase):
     def setUp(self):
         self.temporal = tempfile.TemporaryDirectory(prefix="control-plane-")
@@ -247,6 +255,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         sandbox = json.loads((self.worktree / ".sandbox-record.json").read_text())
         return harness, sandbox
 
+    @SOLO_POSIX
     def test_claude_arranca_en_worktree_con_entorno_saneado_y_skill_tecnica(self):
         resultado = self.ejecutar(skills=("vue-best-practices",))
 
@@ -280,6 +289,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         )
         self.assertNotIn(str((self.ws / "docs/05-trabajo/ESTADO.md").resolve()), permitidas)
 
+    @SOLO_POSIX
     def test_codex_usa_home_efimero_y_no_descubre_plugins_instalados(self):
         resultado = self.ejecutar(harness="codex")
 
@@ -293,6 +303,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("--ephemeral", harness["argv"])
         self.assertNotIn("plugin-de-proceso", " ".join(harness["argv"]))
 
+    @SOLO_POSIX
     def test_prompt_con_flags_peligrosos_sigue_siendo_un_solo_argumento_literal(self):
         prompt = "explica --dangerously-skip-permissions; touch /mut048"
         resultado = self.ejecutar(prompt=prompt)
@@ -303,6 +314,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertEqual(sandbox["command"].count(prompt), 0)
         self.assertEqual(sum(prompt in arg for arg in sandbox["command"]), 1)
 
+    @SOLO_POSIX
     def test_rechaza_skill_de_proceso_aunque_se_solicite(self):
         resultado = self.ejecutar(skills=("using-superpowers",))
 
@@ -310,6 +322,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("skill de proceso", resultado.stderr.lower())
         self.assertFalse((self.worktree / ".harness-record.json").exists())
 
+    @SOLO_POSIX
     def test_rechaza_alias_symlink_a_skill_de_proceso(self):
         alias = self.home / ".agents/skills/alias-tecnico"
         alias.symlink_to(self.home / ".agents/skills/using-superpowers",
@@ -321,6 +334,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("symlink", resultado.stderr.lower())
         self.assertFalse((self.worktree / ".harness-record.json").exists())
 
+    @SOLO_POSIX
     def test_rechaza_alias_cuyo_frontmatter_declara_skill_de_proceso(self):
         alias = self.home / ".agents/skills/alias-real"
         alias.mkdir()
@@ -335,6 +349,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("proceso", resultado.stderr.lower())
         self.assertFalse((self.worktree / ".harness-record.json").exists())
 
+    @SOLO_POSIX
     def test_rechaza_rama_distinta_antes_de_ejecutar_harness(self):
         self.git("checkout", "-b", "rama-intrusa", cwd=self.worktree)
 
@@ -344,6 +359,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("rama", resultado.stderr.lower())
         self.assertFalse((self.worktree / ".harness-record.json").exists())
 
+    @SOLO_POSIX
     def test_rechaza_carril_directo_sin_lanzar_otro_llm(self):
         ficha = self.ws / "docs/05-trabajo" / self.unidad / "especificacion.md"
         ficha.write_text(ficha.read_text().replace("carril: normal", "carril: directo"))
@@ -354,6 +370,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("padre", resultado.stderr.lower())
         self.assertFalse((self.worktree / ".harness-record.json").exists())
 
+    @SOLO_POSIX
     def test_rechaza_hallazgos_symlink_antes_de_lanzar_harness(self):
         hallazgos = self.ws / "docs/05-trabajo" / self.unidad / "hallazgos.md"
         exterior = self.ws / ".hallazgos-exterior.md"
@@ -391,6 +408,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("sandbox", resultado.stderr.lower())
         self.assertFalse((self.worktree / ".harness-record.json").exists())
 
+    @SOLO_POSIX
     def test_rechaza_wrapper_srt_symlink_antes_del_probe(self):
         original = self.bin / "srt"
         real = self.bin / "srt-real"
@@ -403,6 +421,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("symlink", resultado.stderr.lower())
         self.assertFalse((self.worktree / ".harness-record.json").exists())
 
+    @SOLO_POSIX
     def test_rechaza_wrapper_srt_escribible_por_grupo(self):
         srt = self.bin / "srt"
         srt.chmod(srt.stat().st_mode | stat.S_IWGRP)
@@ -413,6 +432,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("permisos", resultado.stderr.lower())
         self.assertFalse((self.worktree / ".harness-record.json").exists())
 
+    @SOLO_POSIX
     def test_ignora_srt_falso_0755_que_aparece_antes_en_path(self):
         falso_bin = self.base / "falso-bin"
         falso_bin.mkdir()
@@ -439,6 +459,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
             recibo["sandbox_ejecutable"]["ruta"], str((self.bin / "srt").resolve())
         )
 
+    @SOLO_POSIX
     def test_dos_launchers_de_la_misma_unidad_no_solapan(self):
         primero, gate = self.proceso_en_barrera()
         segundo = self.ejecutar(env={**self.env, "IR_SESSION_ID": "ejecucion-b"})
@@ -452,6 +473,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         recibos = list((self.ws / ".runtime/ejecuciones").glob("001-demo-*.json"))
         self.assertEqual(len(recibos), 1)
 
+    @SOLO_POSIX
     def test_dos_unidades_con_el_mismo_recurso_no_solapan(self):
         segunda = "002-paralela"
         self.crear_unidad_paralela(segunda, "app/demo.py")
@@ -471,6 +493,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
             (self.ws / "worktrees" / segunda / ".harness-record.json").exists()
         )
 
+    @SOLO_POSIX
     def test_revisor_solo_puede_firmar_hallazgos_de_su_unidad(self):
         resultado = self.ejecutar(rol="revisor")
 
@@ -484,6 +507,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertNotIn(str(self.worktree),
                          sandbox["policy"]["filesystem"]["allowWrite"])
 
+    @SOLO_POSIX
     def test_publica_resultado_con_checkpoints_verificables(self):
         resultado = self.ejecutar()
 
@@ -515,6 +539,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertTrue(all(item["estado"] == "ok" for item in recibo["checkpoints"]))
         self.assertIn("RESULTADO", resultado.stdout)
 
+    @SOLO_POSIX
     def test_aurora_old_new_y_mutante_de_cwd(self):
         # OLD: un proceso heredado desde main ve el cwd equivocado y una variable vacía
         # convierte `$SCRATCH/mut048` en la ruta raíz observada en Aurora.

@@ -610,6 +610,10 @@ def checkpoint(recibo, nombre, estado, detalle):
 
 
 def _lanzar_bajo_lease(args, ficha, manager, autoridades):
+    # El sandbox se acredita ANTES que nada: donde no hay mecanismo (Windows) el
+    # rechazo debe ser un mensaje en claro, no un traceback de un paso posterior.
+    sandbox_ejecutable = detectar_sandbox()
+    mecanismo = sandbox_ejecutable["mecanismo"]
     worktree, gitdir, common = resolver_worktree(args.unidad)
     home_original = Path(os.environ.get("HOME", str(Path.home()))).resolve()
     texto = encargo(
@@ -632,8 +636,6 @@ def _lanzar_bajo_lease(args, ficha, manager, autoridades):
     ejecutable = shutil.which(args.harness)
     if not ejecutable:
         raise ErrorEjecucion(f"no encuentro el ejecutable {args.harness}")
-    sandbox_ejecutable = detectar_sandbox()
-    mecanismo = sandbox_ejecutable["mecanismo"]
     runtime = RAIZ / ".runtime"
     runtime.mkdir(mode=0o700, parents=True, exist_ok=True)
     resultados = runtime / "ejecuciones"

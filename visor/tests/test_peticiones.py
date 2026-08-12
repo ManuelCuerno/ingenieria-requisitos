@@ -60,6 +60,8 @@ class PeticionesTest(unittest.TestCase):
             [sys.executable, str(self.script), *args],
             cwd=self.ws,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
         )
 

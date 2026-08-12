@@ -734,6 +734,13 @@ def contexto_proceso(tipo, ruta):
         if not tipo_unidad:
             raise ErrorPeticion(f"{ruta.relative_to(RAIZ)} no declara tipo")
         return carril, tipo_unidad
+    if tipo == "bug":
+        # Un bug también viaja con carril (directo o normal, runbooks/bug.md). Ignorarlo
+        # aquí hacía imposible crear un bug evaluado como directo: la primera validación
+        # exigía ruta 'directo' y este enlace revalidaba con 'bug' — imposible complacer
+        # a las dos (incidente de campo, 06-08).
+        carril = valor_frontmatter(ruta, "carril") or "normal"
+        return carril, "bug"
     if tipo == "expres":
         return "expres", "expres"
     if tipo == "auditoria":

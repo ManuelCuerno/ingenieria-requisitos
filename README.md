@@ -16,7 +16,10 @@ la IA te entrevista, y validas mirando una web que se va rellenando sola.
 
 ## Cómo se usa
 
-1. Descarga este repositorio y abre una terminal dentro de él.
+1. Descarga este repositorio y abre una terminal dentro de él. Si quieres
+   comprobar en un minuto que todo funciona en tu máquina (Python, git, el
+   validador, y qué piezas opcionales faltan): `python3 visor/doctor.py`
+   (en Windows, `python visor\doctor.py`).
 2. Lanza aquí tu agente de IA. `AGENTS.md` es el enrutador; `CLAUDE.md` y
    `GEMINI.md` lo redirigen al mismo sitio. El agente leerá `RUNBOOK.md`.
 3. El agente te preguntará si partes de cero, de un código que ya existe o

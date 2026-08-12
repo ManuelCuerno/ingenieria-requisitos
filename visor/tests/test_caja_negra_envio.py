@@ -90,7 +90,9 @@ class EnvioSinGhTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="caja-negra-envio-")
         self.addCleanup(self.tmp.cleanup)
-        self.repo = Path(self.tmp.name) / "demo-agents"
+        # resolve(): en Windows el temporal llega en forma 8.3 (RUNNER~1) y el
+        # script imprime la forma larga; se comparan rutas ya normalizadas.
+        self.repo = Path(self.tmp.name).resolve() / "demo-agents"
         (self.repo / ".caja-negra").mkdir(parents=True)
         (self.repo / "docs/00-metodo").mkdir(parents=True)
         (self.repo / "docs/00-metodo/VERSION").write_text("1.1.0\n", encoding="utf-8")
@@ -209,13 +211,15 @@ class RegistrarYValidarTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="caja-negra-esquema-")
         self.addCleanup(self.tmp.cleanup)
-        self.repo = Path(self.tmp.name) / "demo-agents"
+        self.repo = Path(self.tmp.name).resolve() / "demo-agents"
         self.repo.mkdir(parents=True)
 
     def ejecutar(self, *args):
         return subprocess.run(
             [sys.executable, str(CAJA_NEGRA), *args, "--repo", str(self.repo)],
             text=True,
+            encoding="utf-8",
+            errors="replace",
             capture_output=True,
         )
 
