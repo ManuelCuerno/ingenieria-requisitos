@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -181,9 +182,11 @@ class VersionMetodoTest(unittest.TestCase):
         # La actualización se quedó: el runbook volvió.
         self.assertTrue((ws / "docs/00-metodo/runbooks/expres.md").is_file())
 
-    def test_aplicar_revierte_si_la_actualizacion_introduce_fallos_nuevos(self):
-        """El linter que llega con el update es más estricto que el del workspace:
-        eso SÍ revierte, y el mensaje señala los fallos nuevos como causa."""
+    def test_aplicar_no_revierte_aunque_el_linter_viejo_fuera_permisivo(self):
+        """ADR-026: la vara es la MISMA antes y después (el linter nuevo, vía --raiz).
+        Un workspace cuyo linter viejo era permisivo ya no convierte sus defectos
+        preexistentes en «fallos nuevos» del update: el rojo queda como heredado y la
+        actualización se queda (caso de campo 08-08: migración imposible en bucle)."""
         ws = self.workspace_antiguo()
         primera = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
         self.assertEqual(primera.returncode, 0, primera.stdout + primera.stderr)
@@ -195,24 +198,96 @@ class VersionMetodoTest(unittest.TestCase):
 
         resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
 
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertIn("ya estaban antes de actualizar", resultado.stdout)
+        self.assertNotIn("REVERTIDA", resultado.stdout)
+        # La actualización se quedó: el linter permisivo fue reemplazado por el real.
+        self.assertNotIn("sys.exit(0)", linter.read_text(encoding="utf-8"))
+
+    def test_aplicar_revierte_si_la_actualizacion_introduce_fallos_nuevos(self):
+        """Un rojo que NO existía midiendo el estado viejo con el linter nuevo y SÍ
+        existe tras escribir los ficheros nuevos es culpa del update: eso revierte,
+        y el mensaje lo nombra como causa."""
+        copia = self.herramienta_doctorada()
+        ws = self.workspace_antiguo()
+        agents_previo = (ws / "AGENTS.md").read_bytes()
+
+        resultado = self.ejecutar(copia / "visor/actualizar.py", "aplicar", str(ws))
+
         self.assertEqual(resultado.returncode, 1, resultado.stdout + resultado.stderr)
         self.assertIn("REVERTIDA", resultado.stdout)
         self.assertIn("introdujo", resultado.stdout)
-        self.assertIn("sin frontmatter válido", resultado.stdout)
-        # El revert devolvió al workspace SU linter, no el de la plantilla.
-        self.assertIn("sys.exit(0)", linter.read_text(encoding="utf-8"))
+        self.assertIn("MARCADOR_ROJO", resultado.stdout)
+        # El revert restauró lo tocado: el marcador no quedó en el workspace.
+        self.assertEqual((ws / "AGENTS.md").read_bytes(), agents_previo)
+        self.assertFalse((ws / "docs/00-metodo/runbooks/expres.md").exists())
 
-    def test_aplicar_sin_linter_previo_revierte_ante_cualquier_fallo(self):
-        """Sin línea base no se puede jurar de quién es el rojo: conservador, revierte."""
+    def test_aplicar_sin_linter_previo_mide_con_el_nuevo_y_no_revierte(self):
+        """ADR-026: antes, «sin línea base» cualquier rojo revertía y el workspace
+        quedaba atrapado. Ahora la línea base siempre existe: la da el linter nuevo
+        midiendo el estado viejo, y el rojo preexistente es heredado."""
         ws = self.workspace_antiguo()
         self.plantar_fail_estable(ws)
         self.commitear(ws, "ficha rota en workspace sin linter")
 
         resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
 
-        self.assertEqual(resultado.returncode, 1, resultado.stdout + resultado.stderr)
-        self.assertIn("REVERTIDA", resultado.stdout)
-        self.assertIn("no había linter anterior", resultado.stdout)
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertIn("ya estaban antes de actualizar", resultado.stdout)
+        self.assertNotIn("REVERTIDA", resultado.stdout)
+
+    def test_fallos_del_linter_cae_al_linter_del_workspace_si_el_nuevo_revienta(self):
+        """El linter nuevo que revienta (exit != 0/1, sin FAIL) no es una medición:
+        se cae al linter del workspace y, si tampoco hay, a None (rama conservadora)."""
+        if str(RAIZ / "visor") not in sys.path:
+            sys.path.insert(0, str(RAIZ / "visor"))
+        import actualizar
+
+        ws = self.base / "ws-fallback"
+        ws.mkdir()
+        esperado_roto = {
+            "docs/00-metodo/scripts/lint_metodo.py": "import sys\nsys.exit(3)\n"
+        }
+        # Sin linter en el workspace: None (y la política revierte, conservadora).
+        self.assertIsNone(actualizar.fallos_del_linter(ws, esperado_roto))
+        # Con linter viejo en el workspace: su medición vale como línea base.
+        viejo = ws / "docs/00-metodo/scripts/lint_metodo.py"
+        viejo.parent.mkdir(parents=True)
+        viejo.write_text(
+            "print('  FAIL medido por el linter viejo')\nraise SystemExit(1)\n",
+            encoding="utf-8",
+        )
+        self.assertEqual(
+            actualizar.fallos_del_linter(ws, esperado_roto),
+            {"FAIL medido por el linter viejo"},
+        )
+
+    def herramienta_doctorada(self):
+        """Copia funcional de la herramienta cuyo método introduce un rojo NUEVO:
+        su linter falla si expres.md trae MARCADOR_ROJO, y su plantilla lo trae."""
+        copia = self.base / "herramienta-doctorada"
+        for carpeta in ("visor", "plantilla"):
+            shutil.copytree(RAIZ / carpeta, copia / carpeta,
+                            ignore=shutil.ignore_patterns("tests", "__pycache__"))
+        for nombre in ("RUNBOOK.md", "requirements-dev.txt"):
+            shutil.copyfile(RAIZ / nombre, copia / nombre)
+        expres = copia / "plantilla/docs/00-metodo/runbooks/expres.md"
+        expres.write_text(expres.read_text(encoding="utf-8") + "\nMARCADOR_ROJO\n",
+                          encoding="utf-8")
+        linter = copia / "plantilla/docs/00-metodo/scripts/lint_metodo.py"
+        ancla = 'agents = RAIZ / "AGENTS.md"'
+        inyeccion = (
+            '_expres = RAIZ / "docs/00-metodo/runbooks/expres.md"\n'
+            'if _expres.is_file() and "MARCADOR_ROJO" in _expres.read_text('
+            'encoding="utf-8"):\n'
+            '    fail("expres.md trae MARCADOR_ROJO: rojo introducido por la '
+            'actualización (inducido por el test)")\n'
+        )
+        contenido = linter.read_text(encoding="utf-8")
+        self.assertIn(ancla, contenido)
+        linter.write_text(contenido.replace(ancla, inyeccion + ancla),
+                          encoding="utf-8")
+        return copia
 
     def herramienta_clonada(self):
         """Un 'origin' local de la herramienta y su clon; devuelve (origen, clon)."""

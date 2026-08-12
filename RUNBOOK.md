@@ -899,8 +899,9 @@ distancia. Si no hay un punto de retorno limpio, no se toca nada y se dice por q
    `observacion`; no fabrica peticiones retroactivas.
 
 3. **Enséñale el resultado.** `git -C <workspace> log --oneline -2` y
-   `git -C <workspace> show`: qué ha cambiado, contado en negocio ("ahora el
-   cierre avisa si algo se quedó sin guardar"). Si algo no le convence, el
+   `git -C <workspace> show --stat` (jamás el diff entero: el método son ~90 ficheros
+   y casi un mega — `--stat` dice qué cambió sin pagarlo): qué ha cambiado, contado
+   en negocio ("ahora el cierre avisa si algo se quedó sin guardar"). Si algo no le convence, el
    comando para deshacerlo está escrito en `docs/00-metodo/HISTORIAL.md`. Si ese
    workspace tiene remoto, ofrécele publicarlo — pero **`git push` solo con su OK
    explícito, workspace por workspace**: publicar en un remoto es del dueño, nunca

@@ -107,6 +107,29 @@ def copiar_documentacion(workspace, salida):
         shutil.copyfile(documento, destino_flows / nombre)
 
 
+def escribir_estado_congelado(workspace):
+    """Las rutas a commitear tras congelar la documentación.
+
+    ESTADO.md lo escribe el PADRE del workspace: en un re-vuelco (modo C) machacarlo
+    destruía la tabla de unidades y los bloqueos reales (ADR-026). Solo se escribe si
+    no existe (primer finalizado); si existe, se conserva y se dice."""
+    estado = workspace / "docs" / "05-trabajo" / "ESTADO.md"
+    rutas_commit = ["docs/01-constitucion", "docs/02-flujos"]
+    if not estado.is_file():
+        estado.write_text(
+            "# ESTADO — diseño congelado\n\n"
+            "- Los planos fueron aprobados y pasaron validación estructural y E2E.\n"
+            "- Constitución y flows están regenerados desde la fuente canónica.\n"
+            "- Siguiente fase: investigación/planificación e implementación por recorridos.\n",
+            encoding="utf-8",
+        )
+        rutas_commit.append("docs/05-trabajo/ESTADO.md")
+    else:
+        print("ESTADO.md conservado: lo mantiene el padre del workspace; anota tú allí "
+              "que los planos quedaron congelados.")
+    return rutas_commit
+
+
 def commit_si_hay_cambios(repo, mensaje, incluir_todo=False):
     if incluir_todo:
         ejecutar(["git", "add", "-A"], cwd=repo)
@@ -117,6 +140,22 @@ def commit_si_hay_cambios(repo, mensaje, incluir_todo=False):
         r = ejecutar(["git", "commit", "-m", mensaje], cwd=repo)
         if r.returncode:
             morir("no pude crear el commit en %s:\n%s" % (repo, r.stdout))
+
+
+def commit_inicial_o_aviso(main):
+    """El barrido total (`add -A`) SOLO vale para el primer import de una carpeta ingerida
+    sin historia: ahí todo lo que hay es, por definición, el estado inicial. Con historia,
+    ese mismo barrido absorbía en silencio trabajo sin commitear del usuario o de una
+    unidad a medio cerrar (ADR-026): se publica lo commiteado y lo demás se nombra."""
+    sin_historia = ejecutar(["git", "rev-parse", "--verify", "HEAD"], cwd=main).returncode != 0
+    if sin_historia:
+        commit_si_hay_cambios(main, "Importa el estado inicial del código", incluir_todo=True)
+        return
+    pendiente = ejecutar(["git", "status", "--porcelain=v1"], cwd=main)
+    if pendiente.stdout.strip():
+        print("OJO: main/ tiene cambios sin commitear. NO los toco ni los publico "
+              "(se publica lo commiteado); revisa si son tuyos o de una unidad a "
+              "medio cerrar.")
 
 
 def repo_github(owner, nombre):
@@ -148,9 +187,7 @@ def publicar_github(workspace, owner, nombre):
     url_codigo = repo_github(owner, nombre)
     url_meta = repo_github(owner, nombre_meta)
 
-    # La copia de trabajo es propiedad de este workspace: se conserva también
-    # cualquier fichero local que llegó al ingerir una carpeta sin remoto.
-    commit_si_hay_cambios(main, "Importa el estado inicial del código", incluir_todo=True)
+    commit_inicial_o_aviso(main)
     configurar_remoto(main, url_codigo)
     subida = ejecutar(["git", "push", "-u", "origin", "HEAD:main"], cwd=main)
     if subida.returncode:
@@ -230,15 +267,9 @@ def main():
         )
         copiar_documentacion(workspace, salida)
 
-    estado = workspace / "docs" / "05-trabajo" / "ESTADO.md"
-    estado.write_text(
-        "# ESTADO — diseño congelado\n\n"
-        "- Los planos fueron aprobados y pasaron validación estructural y E2E.\n"
-        "- Constitución y flows están regenerados desde la fuente canónica.\n"
-        "- Siguiente fase: investigación/planificación e implementación por recorridos.\n",
-        encoding="utf-8",
-    )
-    ejecutar(["git", "add", "docs"], cwd=workspace)
+    # Rutas explícitas: `git add docs` entero arrastraba trabajo del usuario sin
+    # commitear, contradiciendo la regla 3 del propio método.
+    ejecutar(["git", "add", *escribir_estado_congelado(workspace)], cwd=workspace)
     commit_si_hay_cambios(workspace, "Congela planos aprobados y documentación")
 
     nombre = args.nombre or workspace.name.removesuffix("-agents")

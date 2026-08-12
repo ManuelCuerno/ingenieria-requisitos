@@ -290,7 +290,28 @@ def contenido_esperado(workspace):
     esperado["setup.py"] = (PLANTILLA / "setup.py").read_text(encoding="utf-8")
     # El .gitignore del meta-repo es infraestructura del método: es lo que mantiene main/ y
     # worktrees/ fuera de git. Sin él, el workspace intenta versionar el repo de código.
-    esperado[".gitignore"] = (PLANTILLA / "gitignore").read_text(encoding="utf-8")
+    # Pero machacarlo ENTERO destapaba lo que el usuario ignoraba a propósito: sus ficheros
+    # aparecían como untracked, el árbol quedaba «sucio» y la SIGUIENTE actualización se
+    # bloqueaba por ello (caso de campo 08-08). Sus líneas se conservan bajo un marcador.
+    plantilla_gitignore = (PLANTILLA / "gitignore").read_text(encoding="utf-8")
+    esperado[".gitignore"] = plantilla_gitignore
+    gitignore_actual = workspace / ".gitignore"
+    if gitignore_actual.is_file():
+        texto_actual = gitignore_actual.read_text(encoding="utf-8", errors="replace")
+        base = {linea.strip() for linea in plantilla_gitignore.splitlines()}
+        tuyas = [linea.rstrip() for linea in texto_actual.splitlines()
+                 if linea.strip() and not linea.strip().startswith("#")
+                 and linea.strip() not in base]
+        if tuyas:
+            fusionado = (
+                plantilla_gitignore.rstrip("\n")
+                + "\n\n# --- tuyas (Modo D conserva esta sección) ---\n"
+                + "\n".join(tuyas) + "\n"
+            )
+            esperado[".gitignore"] = fusionado
+            if fusionado != texto_actual:
+                avisos.append(
+                    f".gitignore: conservo {len(tuyas)} línea(s) tuyas bajo el marcador")
     esperado["worktrees/README.md"] = (
         PLANTILLA / "worktrees-README.md").read_text(encoding="utf-8")
     esperado[".github/workflows/lint.yml"] = bootstrap.generar_ci()
@@ -467,12 +488,40 @@ def lineas_fail(salida):
     }
 
 
-def fallos_del_linter(workspace):
-    """FAIL que el linter del workspace da AHORA; None si no hay linter que consultar.
+def fallos_del_linter(workspace, esperado=None):
+    """FAIL que da AHORA el workspace; None si no hay linter que consultar.
 
     Es la línea base previa a actualizar: sin ella no se distingue un fallo que la
     actualización introduce de uno que el workspace ya arrastraba, y ese matiz decide
-    si se revierte (culpa nuestra) o se avisa (deuda del workspace)."""
+    si se revierte (culpa nuestra) o se avisa (deuda del workspace).
+
+    Con `esperado` (el contenido del método nuevo) la línea base se mide con el linter
+    NUEVO sobre el workspace viejo (`--raiz`): la MISMA vara que el chequeo posterior.
+    Con la vara vieja, renombrar el mensaje de un check convertía un fallo heredado en
+    «nuevo» y revertía una actualización sana (ADR-026, caso de campo 08-08). Si el
+    linter nuevo no puede medir (crash, versión sin --raiz), se cae al del workspace."""
+    if esperado:
+        with tempfile.TemporaryDirectory(prefix="modo-d-lint-") as tmp:
+            scripts = Path(tmp) / "scripts"
+            scripts.mkdir()
+            for relativo, contenido in esperado.items():
+                if relativo.startswith("docs/00-metodo/scripts/"):
+                    (scripts / relativo.rsplit("/", 1)[1]).write_text(
+                        contenido, encoding="utf-8")
+            linter_nuevo = scripts / "lint_metodo.py"
+            if linter_nuevo.is_file():
+                r = subprocess.run(
+                    [sys.executable, str(linter_nuevo), "--raiz", str(workspace)],
+                    cwd=str(workspace), capture_output=True, text=True,
+                    encoding="utf-8", errors="replace",
+                )
+                # Exit 0 = verde; exit 1 CON líneas FAIL = medición válida en rojo.
+                # Cualquier otra cosa es un linter que reventó, no una línea base.
+                if r.returncode == 0:
+                    return set()
+                medido = lineas_fail(r.stdout + r.stderr)
+                if r.returncode == 1 and medido:
+                    return medido
     linter = workspace / "docs/00-metodo/scripts/lint_metodo.py"
     if not linter.is_file():
         return None
@@ -806,6 +855,12 @@ def recuperar_journal(workspace):
             )
     verificar_recuperable(workspace, snapshot, publicado)
     restaurar_rutas(workspace, snapshot)
+    # Una muerte entre el stage exacto y el commit deja el ÍNDICE con el método nuevo:
+    # restaurar el árbol sin limpiarlo bloqueaba la siguiente ejecución con un «índice
+    # sucio» que no era del usuario (revisión adversarial 12-08). El punto de retorno
+    # del journal es HEAD (no hubo commit), así que se repone índice = HEAD en las
+    # rutas de la operación.
+    limpiar_indice(workspace, datos["punto_retorno"], sorted(snapshot))
     ruta.unlink()
     print("    Recuperé una actualización interrumpida desde su journal durable.")
     return True
@@ -866,7 +921,7 @@ def _aplicar_bajo_lease(workspace, titulo, autoridad):
     if not cambios and not retirados:
         return 0
 
-    fallos_previos = fallos_del_linter(workspace)
+    fallos_previos = fallos_del_linter(workspace, esperado)
     operaciones = list(cambios) + list(retirados)
     rutas_tocadas = list(operaciones)
     for extra in ("METODO.json", HISTORIAL):
@@ -880,10 +935,8 @@ def _aplicar_bajo_lease(workspace, titulo, autoridad):
     # silenciosa. Si cualquier ruta a tocar ensució, se aborta ANTES de escribir nada.
     colision = colision_tardia(workspace, rutas_tocadas)
     if colision:
-        muestra = ", ".join(colision[:5])
-        resto = f" (+{len(colision) - 5})" if len(colision) > 5 else ""
         print(f"\n    NO TOCO NADA: apareció trabajo sin commitear en rutas del método "
-              f"mientras preparaba la actualización: {muestra}{resto}. Commitéalo o "
+              f"mientras preparaba la actualización: {', '.join(colision)}. Commitéalo o "
               f"descártalo y reintenta.")
         return 1
     publicado = preparar_publicado(
@@ -975,6 +1028,23 @@ def _aplicar_bajo_lease(workspace, titulo, autoridad):
     except RuntimeError:
         limpiar_indice(workspace, sha, rutas_tocadas)
         raise
+    # El commit lleva TODO el índice: si el usuario metió un `git add` ajeno entre el
+    # punto de retorno y aquí, ese trabajo entraría en silencio en el commit del
+    # método — la clase de absorción que el P0 de 1.2.0 cerró para el árbol. Se
+    # revierte entero; el índice del usuario queda exactamente como él lo dejó.
+    codigo, staged = git(workspace, "diff", "--cached", "--name-only")
+    ajenas = ([] if codigo else
+              sorted(set(staged.splitlines()) - set(rutas_tocadas) - {""}))
+    if codigo or ajenas:
+        limpiar_indice(workspace, sha, rutas_tocadas)
+        verificar_recuperable(workspace, snapshot, publicado)
+        restaurar_rutas(workspace, snapshot)
+        (workspace / JOURNAL).unlink(missing_ok=True)
+        print(f"\n    ACTUALIZACIÓN REVERTIDA: apareció un git add tuyo a mitad de "
+              f"actualización ({', '.join(ajenas) or 'no pude listar el índice'}). No "
+              f"absorbo trabajo ajeno: tu índice queda como estaba; commitéalo o "
+              f"quítalo del índice y reintenta.")
+        return 1
     codigo, salida = git(workspace, "commit", "-m",
                          f"Método actualizado desde la herramienta ({len(operaciones)} ficheros)",
                          "-m", f"Modo-D-Operation: {identificador}")

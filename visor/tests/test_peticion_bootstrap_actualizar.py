@@ -496,19 +496,24 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         # Una edición fuera de las rutas del método no colisiona.
         self.assertEqual(actualizar.colision_tardia(ws, ["docs/otro.md"]), [])
 
-    def test_actualizar_revierte_rutas_si_el_linter_falla(self):
+    def test_actualizar_no_revierte_por_rojo_heredado_aunque_no_hubiera_linter(self):
+        """ADR-026: la línea base la mide el linter NUEVO sobre el estado viejo (--raiz),
+        así que un defecto preexistente es heredado aunque el workspace ni siquiera
+        tuviera linter — antes eso revertía y dejaba al workspace atrapado en el
+        método viejo (caso de campo 08-08)."""
         ws = self.workspace_antiguo(con_trabajo=False)
         (ws / "codebase").mkdir()
         subprocess.run(["git", "add", "codebase"], cwd=ws, check=True)
         # Git no guarda carpetas vacías: el linter sí las ve, que es justo el fallo inducido.
-        agents_previo = (ws / "AGENTS.md").read_bytes()
 
         resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
 
-        self.assertNotEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
-        self.assertEqual((ws / "AGENTS.md").read_bytes(), agents_previo)
-        self.assertFalse((ws / "docs/00-metodo/scripts/peticion.py").exists())
-        self.assertFalse((ws / "docs/05-trabajo/peticiones/LEGACY.json").exists())
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertIn("ya estaban antes de actualizar", resultado.stdout)
+        self.assertNotIn("REVERTIDA", resultado.stdout)
+        # La actualización se quedó entera: el inbox y su inventario existen.
+        self.assertTrue((ws / "docs/00-metodo/scripts/peticion.py").exists())
+        self.assertTrue((ws / "docs/05-trabajo/peticiones/LEGACY.json").exists())
 
     def test_actualizar_respeta_lease_exclusivo_del_workspace(self):
         ws = self.workspace_antiguo()

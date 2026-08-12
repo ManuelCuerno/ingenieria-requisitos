@@ -119,6 +119,7 @@ DECISIONES = (
     "023-control-plane-concurrencia-local.md",
     "024-control-plane-de-seguridad-y-evidencia-causal.md",
     "025-el-trabajo-aparcado-no-bloquea-el-modo-d.md",
+    "026-guiar-no-bloquear.md",
 )
 METODO_RAIZ = (
     "README.md", "VERSION", "roles.md", "comunicacion.md", "auditoria-calidad.md",
@@ -408,11 +409,19 @@ def generar_repos_yaml(nombre, remoto, rama_principal="main"):
     )
 
 
-def generar_estado(remoto_pendiente):
+def generar_estado(remoto_pendiente, brownfield=False):
     pendientes = ["Fase 3 (investigación): `03-investigacion/SINTESIS.md` por escribir, "
                   "acotada por `01-constitucion/bias.md`.",
                   "Fase 4 (planificación): `04-planificacion/ROADMAP.md` por escribir "
                   "(esqueleto andante primero)."]
+    if brownfield:
+        # El agente se orienta por ESTE fichero (AGENTS.md, arranque 3). Si la adopción
+        # solo vive en el bias y en el mensaje del bootstrap, la primera sesión salta a
+        # fase 3 sin acotar y se come el repo entero (caso de campo 08-08, ADR-026).
+        pendientes.insert(0, "ADOPCIÓN (brownfield): PRIMERA unidad del workspace — "
+                             "`03-investigacion/ADOPCION.md` por levantar (runbook "
+                             "`adopcion`). Acota la fase 3; ninguna unidad de código "
+                             "se despacha antes.")
     if remoto_pendiente:
         pendientes.append("Remotos git por crear y conectar (meta y código); ver `repos.yaml`.")
     lista = "\n".join(f"{i}. {p}" for i, p in enumerate(pendientes, 1))
@@ -861,8 +870,8 @@ def main():
         preparar_documentos_de_planos(pj, pj_destino)
     (docs / "02-flujos" / "INDICE.md").write_text(generar_indice(planos, detalles),
                                                   encoding="utf-8")
-    (docs / "05-trabajo" / "ESTADO.md").write_text(generar_estado(remoto_pendiente),
-                                                   encoding="utf-8")
+    (docs / "05-trabajo" / "ESTADO.md").write_text(
+        generar_estado(remoto_pendiente, brownfield), encoding="utf-8")
 
     # --- Raíz ---
     agents = (PLANTILLA / "AGENTS.md").read_text(encoding="utf-8")
@@ -950,8 +959,13 @@ def main():
               f"{remoto_codigo}; main/ sigue siempre origin/{rama_codigo}.")
     for a in avisos:
         print(f"AVISO: {a}")
-    print("Siguiente paso del método: fase 3 (investigación) — abrir sesión del agente "
-          "padre en el workspace; se orientará con AGENTS.md y ESTADO.md.")
+    if brownfield:
+        print("Siguiente paso del método: la ADOPCIÓN (runbook adopcion.md, primera unidad "
+              "obligatoria) — abrir sesión del agente padre en el workspace; ESTADO.md ya "
+              "la nombra como primer pendiente.")
+    else:
+        print("Siguiente paso del método: fase 3 (investigación) — abrir sesión del agente "
+              "padre en el workspace; se orientará con AGENTS.md y ESTADO.md.")
 
 
 if __name__ == "__main__":

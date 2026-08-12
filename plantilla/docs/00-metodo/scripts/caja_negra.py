@@ -353,6 +353,13 @@ def enviar(args):
     print("\nCompartirlo es VOLUNTARIO y sirve solo para mejorar el método. "
           "No se envía nada más que lo de arriba.")
     if not args.si:
+        # Un stdin que no es una terminal (un agente, un PIPE) no puede contestar: el
+        # input() se quedaba esperando para siempre. El consentimiento no se presupone:
+        # sin terminal, no se envía y se dice cómo consentir (ADR-026).
+        if not sys.stdin.isatty():
+            print("\nSin terminal interactiva no envío nada. Para consentir el envío, "
+                  "repite el comando con --si.")
+            return 0
         try:
             respuesta = input("¿Enviar ahora? [s/N] ").strip().lower()
         except EOFError:

@@ -6,6 +6,7 @@ recrea las carpetas locales y ejecuta el linter del método. Es idempotente
 y no necesita dependencias externas aparte de Python y Git.
 """
 
+import os
 import re
 import shutil
 import subprocess
@@ -27,14 +28,22 @@ import repo_config
 
 
 def ejecutar(*comando, cwd=RAIZ):
+    # stdin va CERRADO y git tiene prohibido preguntar por terminal: un remoto que pide
+    # credenciales o un host SSH sin verificar se convertía aquí en una espera muda con el
+    # stdout capturado — el agente (o el usuario) veía "nada" durante minutos (ADR-026).
+    # Con esto, ese caso falla en segundos y con el mensaje de git delante.
+    entorno = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+    entorno.setdefault("GIT_SSH_COMMAND", "ssh -oBatchMode=yes")
     return subprocess.run(
         [str(parte) for parte in comando],
         cwd=cwd,
         text=True,
         encoding="utf-8",
         errors="replace",
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        env=entorno,
     )
 
 
@@ -144,7 +153,22 @@ def main():
     comprobacion = ejecutar(sys.executable, linter)
     print("\n" + comprobacion.stdout.rstrip())
     if comprobacion.returncode:
-        morir("el workspace no supera el linter del método")
+        # Un FAIL del linter NO corta el arranque (ADR-026): cortar aquí dejaba al usuario
+        # atrapado también cuando el rojo era un bug del propio método, que él tiene
+        # prohibido arreglar en su workspace. El rojo se enseña, con su salida escrita.
+        print(
+            "\nOJO: el linter del método está en ROJO. El arranque sigue; el rojo no se "
+            "ignora, se despacha:\n"
+            "  - ¿El fallo es de tu proyecto (una ficha, una rama, el estado)? Arréglalo "
+            "antes de seguir.\n"
+            "  - ¿Viene del método (no has tocado docs/00-metodo/)? Regístralo y sigue "
+            "trabajando:\n"
+            "      python3 docs/00-metodo/scripts/caja_negra.py registrar --repo . "
+            "--fase arranque --severidad P1 \\\n"
+            "        --sintoma \"<pega aquí el FAIL>\" --esperado \"linter en verde\" "
+            "--actual \"<pega aquí el FAIL>\"\n"
+            "    El arreglo llega con la próxima versión del método (Modo D)."
+        )
 
     ultimo = ejecutar("git", "-C", codigo, "log", "--oneline", "-1")
     if ultimo.returncode:

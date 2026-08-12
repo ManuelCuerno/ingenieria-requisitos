@@ -26,6 +26,14 @@ for _salida in (sys.stdout, sys.stderr):
         _salida.reconfigure(encoding="utf-8", errors="replace")
 
 RAIZ = Path(__file__).resolve().parents[3]
+# `--raiz RUTA` desacopla el linter del workspace donde vive: Modo D mide el workspace
+# VIEJO con el linter NUEVO —la misma vara antes y después de actualizar— para que un
+# cambio de redacción de un check no se disfrace de regresión y revierta en falso (ADR-026).
+if "--raiz" in sys.argv:
+    _indice = sys.argv.index("--raiz")
+    if _indice + 1 >= len(sys.argv):
+        sys.exit("uso: lint_metodo.py [--raiz RUTA_DEL_META_REPO]")
+    RAIZ = Path(sys.argv[_indice + 1]).resolve()
 fallos, avisos = [], []
 HOY = datetime.date.today()
 

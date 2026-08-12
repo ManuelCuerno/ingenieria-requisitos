@@ -4,6 +4,47 @@ La versión del método viaja con cada proyecto (en su `METODO.json`). Para llev
 estas mejoras a tus proyectos ya creados: abre tu agente aquí y dile «pon al día
 mis proyectos».
 
+## 1.3.0 — 2026-08-12
+
+Nacida del feedback de campo de la primera semana con usuarios: cuatro quejas reales
+(subagentes «esperando una aprobación que no llega», migraciones que se saltan la
+adopción o revierten en falso, publicación bloqueada por un rojo del propio método, y
+tests interrumpidos sin aviso), una decisión de fondo, y veinticinco escenarios de
+regresión que reproducen cada queja y demuestran que ya no ocurre.
+
+- **Guiar, no bloquear (ADR-026).** Cada control del método queda clasificado: gate duro
+  SOLO ante daño irreversible (perder trabajo, producción, secretos), siempre con la
+  salida escrita en el propio mensaje; todo lo demás avisa y te deja seguir.
+- **Un rojo del método ya no te deja tirado.** Si el linter falla, `setup.py` lo enseña y
+  el arranque continúa: ¿el fallo es tuyo? se arregla; ¿es del método? se registra en la
+  caja negra y se sigue — el arreglo llega con la versión siguiente. Antes ese rojo
+  mataba el arranque también cuando la culpa era nuestra.
+- **La migración mide antes y después con la misma vara.** El Modo D calcula su línea
+  base con el linter NUEVO sobre tu workspace tal como está: un check reescrito o más
+  estricto ya no se disfraza de «fallo nuevo» ni revierte una actualización sana. Lo que
+  SÍ introduce un fallo de verdad sigue revirtiendo, y ahora te nombra la causa completa.
+- **Modo D respeta lo tuyo, también en los detalles.** Tus líneas del `.gitignore` se
+  conservan bajo un marcador (antes se machacaban y el árbol quedaba «sucio» para
+  siempre); un `git add` tuyo a mitad de actualización la aborta entera en vez de
+  absorberse en el commit del método; y un corte de luz entre el stage y el commit ya no
+  deja el índice bloqueado con un diagnóstico falso: la siguiente pasada se recupera sola.
+- **La adopción brownfield ya no se salta en silencio.** Si tu proyecto nace sobre código
+  existente, `ESTADO.md` la nombra como PRIMERA tarea, el bootstrap te manda a ella (no a
+  la fase 3), y despachar código sin `ADOPCION.md` avisa en claro — avisa, no encierra.
+- **Nada del método mata tu trabajo.** No se borra un worktree con procesos vivos dentro
+  (una suite corriendo sobrevive al cierre), sondear una sesión jamás la interrumpe, y
+  matar procesos por nombre (`pkill -f`) sigue siendo FAIL del linter.
+- **Los cuelgues «esperando una aprobación que no llega» tienen tope.** El hook de
+  preparación corre con stdin cerrado, tope de tiempo y grupo de proceso propio (un hijo
+  huérfano ya no retiene la tubería); git no puede pedir credenciales en silencio durante
+  el arranque; el candado de leases espera con límite también en Mac/Linux (antes, solo
+  Windows); el launcher acepta `--tope-minutos`; y el despacho te dice que lo lances en
+  segundo plano, porque un shell con tope corto lo mataría a mitad.
+- **El manual dice la verdad sobre el Modo D.** El README que viaja con cada workspace
+  describía una «auditoría del método» negociada a diff que no existe (y que salía
+  carísima en tokens); ahora describe lo que de verdad pasa. Y el paso de enseñar el
+  resultado usa `git show --stat`, no el diff entero de ~90 ficheros.
+
 ## 1.2.0 — 2026-08-12
 
 - **Windows funciona de punta a punta, y ahora el CI lo exige.** Cerrada la portabilidad:

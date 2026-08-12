@@ -33,6 +33,11 @@ try:
 except ImportError:
     msvcrt = None
 
+# Tope de espera al candado del coordinador, en las DOS plataformas: esperar sin límite a
+# un candado huérfano dejaba a todas las sesiones colgadas en silencio (ADR-026). Los
+# tests lo bajan por entorno para no pagar el minuto entero.
+TOPE_COORDINADOR_SEGUNDOS = int(os.environ.get("IR_TOPE_COORDINADOR_SEGUNDOS", "60"))
+
 
 class LeaseError(RuntimeError):
     pass
@@ -256,8 +261,24 @@ class LeaseManager:
         lock_path = self.root / "coordinator.lock"
         descriptor = os.open(str(lock_path), os.O_RDWR | os.O_CREAT, 0o600)
         try:
+            tope = TOPE_COORDINADOR_SEGUNDOS
             if fcntl is not None:
-                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                # Mismo contrato que la rama Windows de abajo: se sondea con tope y se
+                # traduce a LeaseBusy. El flock bloqueante sin límite dejaba a TODAS las
+                # sesiones POSIX esperando para siempre a un candado huérfano — el arreglo
+                # de 1.1.1/1.2.0 solo había llegado a Windows (ADR-026).
+                limite = time.monotonic() + tope
+                while True:
+                    try:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except OSError:
+                        if time.monotonic() >= limite:
+                            raise LeaseBusy(
+                                f"el coordinador de leases sigue ocupado tras {tope} s; "
+                                "¿otra sesión retiene el candado?"
+                            )
+                        time.sleep(0.05)
                 liberar = lambda: fcntl.flock(descriptor, fcntl.LOCK_UN)
             elif msvcrt is not None:
                 if os.fstat(descriptor).st_size == 0:
@@ -265,7 +286,7 @@ class LeaseManager:
                 # LK_LOCK abandona a los ~10 s con EDEADLK y el OSError no es LeaseError:
                 # ningún llamador lo captura. Se sondea sin bloquear hasta un límite ancho
                 # y, si no entra, se traduce a LeaseBusy como en el resto del control plane.
-                limite = time.monotonic() + 60
+                limite = time.monotonic() + tope
                 while True:
                     os.lseek(descriptor, 0, os.SEEK_SET)
                     try:
@@ -274,7 +295,7 @@ class LeaseManager:
                     except OSError:
                         if time.monotonic() >= limite:
                             raise LeaseBusy(
-                                "el coordinador de leases sigue ocupado tras 60 s; "
+                                f"el coordinador de leases sigue ocupado tras {tope} s; "
                                 "¿otra sesión retiene el candado?"
                             )
                         time.sleep(0.05)

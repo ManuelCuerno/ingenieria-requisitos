@@ -711,7 +711,23 @@ def _lanzar_bajo_lease(args, ficha, manager, autoridades):
                 autoridad.assert_owner()
             afirmar_ejecutable_sandbox(sandbox_ejecutable)
             gestion_leases.failpoint("ejecucion_antes_harness")
-            resultado = subprocess.run(envuelto(argv), cwd=str(worktree), env=env)
+            # stdin CERRADO: el harness delegado corre sin nadie al otro lado — cualquier
+            # cosa que pregunte por stdin (git, ssh, un instalador) se quedaba esperando
+            # una respuesta que no puede llegar, y el padre lo veía como un cuelgue mudo
+            # de minutos (feedback de campo 06-08, ADR-026).
+            tope = getattr(args, "tope_minutos", 0) or 0
+            resultado = subprocess.run(
+                envuelto(argv), cwd=str(worktree), env=env,
+                stdin=subprocess.DEVNULL, timeout=tope * 60 if tope else None,
+            )
+        except subprocess.TimeoutExpired as exc:
+            checkpoint(recibo, "harness", "fail", f"tope de {tope} min superado")
+            recibo["error"] = f"el harness superó el tope de {tope} min y fue detenido"
+            recibo["git"]["final"] = evidencia_git(worktree)
+            guardar_recibo(ruta_recibo, recibo)
+            raise ErrorEjecucion(
+                f"{args.harness} superó el tope de {tope} min; el trabajo parcial queda "
+                f"en el worktree y el recibo en {ruta_recibo}") from exc
         except OSError as exc:
             checkpoint(recibo, "harness", "fail", str(exc))
             recibo["error"] = str(exc)
@@ -770,6 +786,9 @@ def main():
     p.add_argument("--rol", choices=("constructor", "revisor"), default="constructor")
     p.add_argument("--skill-tecnica", action="append", default=[])
     p.add_argument("--prompt", required=True)
+    p.add_argument("--tope-minutos", type=int, default=0,
+                   help="mata el harness si supera este tope (0 = sin tope); el recibo "
+                        "queda con el motivo en vez de un cuelgue mudo")
     args = parser.parse_args()
     try:
         return lanzar(args)

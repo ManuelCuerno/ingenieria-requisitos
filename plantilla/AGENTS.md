@@ -11,8 +11,8 @@ método. El código vive en otro repo, `main/` (solo lectura), y se trabaja en `
 1. **Actualiza el taller:** ejecuta `setup.py` con el Python disponible. Esto coloca
    `main/` en la última `origin/main` mediante fast-forward; si no puede, PARA y explica
    por qué. Nunca trabajes desde una referencia remota antigua.
-2. **Linta el método:** `python3 docs/00-metodo/scripts/lint_metodo.py`. Un FAIL se arregla
-   antes de seguir (regla dura 13).
+2. **Linta el método:** `python3 docs/00-metodo/scripts/lint_metodo.py`. Un FAIL tuyo se
+   arregla antes de seguir; uno causado por el método no te bloquea (regla 13, ADR-026).
 3. **Lee `docs/05-trabajo/ESTADO.md`**: dónde estamos, qué hay en vuelo y qué toca ahora.
 4. **Declara tu rol al usuario y confírmalo ANTES de trabajar.** Ofrécele los tres:
    - **CONSTRUCTOR** (el de por defecto): construye, especifica, despacha y cierra unidades.
@@ -99,7 +99,7 @@ método. El código vive en otro repo, `main/` (solo lectura), y se trabaja en `
     fallo repetido no se normaliza. **Los outputs largos se REFERENCIAN por ruta en `.runtime/`,
     no se pegan**: solo el veredicto y las líneas que lo prueban.
 13. **Los guardianes se lintean.** `lint_metodo.py` al arrancar y cerrar; `lint_ci.py` antes
-    del merge (`--require-e2e` si los planos seleccionan E2E); `lint_deploy.py` antes de producción. Un FAIL se arregla; estructura solo con ADR.
+    del merge (`--require-e2e` si los planos seleccionan E2E); `lint_deploy.py` antes de producción. Un FAIL del proyecto se arregla; uno causado por el MÉTODO se registra (`caja_negra.py registrar`) y NO te bloquea: sigue, el arreglo llega por Modo D (ADR-026). Estructura solo con ADR.
 14. **Los flujos siguen vivos — la puerta la abre el DELTA, no el cambio.** Si el trabajo
     **añade, quita o contradice** algo del mapa, asume el rol ANALISTA DE FLUJOS y sigue
     `docs/00-metodo/requisitos/RUNBOOK.md`: modifica `docs/02-flujos/planos/`, enseña el visor

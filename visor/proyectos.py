@@ -39,7 +39,20 @@ def bloqueo_registro():
         try:
             import fcntl
 
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            # Igual que la rama Windows: sondeo con tope en vez de espera infinita a un
+            # candado que puede ser huérfano (ADR-026).
+            limite = time.monotonic() + 60
+            while True:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= limite:
+                        raise SystemExit(
+                            "No pude obtener el candado del registro en 60 s; "
+                            "¿otro proceso lo tiene retenido?"
+                        )
+                    time.sleep(0.05)
             liberar = lambda: fcntl.flock(descriptor, fcntl.LOCK_UN)
         except ImportError:  # pragma: no cover - rama Windows
             import msvcrt

@@ -92,13 +92,16 @@ en la rama `main` más reciente mediante una actualización fast-forward desde `
 ## Recibir mejoras del método
 
 La lanzadera recuerda la huella de la plantilla en `METODO.json`. Para recibir mejoras,
-abre un agente en `ingenieria-requisitos` y pídele que audite este workspace. El agente
-seguirá su playbook, distinguirá reglas antiguas de personalizaciones y te enseñará el diff.
-Para incluir esta carpeta en la memoria local de otro ordenador:
+abre un agente en `ingenieria-requisitos` y dile **«pon al día mis proyectos»** (Modo D:
+`visor/actualizar.py`). No es una auditoría fichero a fichero ni un diff que se negocia:
+el Modo D sobrescribe EXACTAMENTE la lista cerrada de ficheros del método, te enseña el
+informe de lo que cambia antes de escribir, deja punto de retorno en `HISTORIAL.md` y
+aborta solo ante daño real (trabajo tuyo sin commitear en rutas del método). Para incluir
+esta carpeta en la memoria local de otro ordenador:
 
 ```text
 python3 visor/proyectos.py registrar RUTA_DE_ESTE_WORKSPACE
 ```
 
-No existe una copia automática a ciegas. Los planos, el trabajo del proyecto,
-`repos.yaml` y `main/` quedan fuera de la auditoría del método.
+Los planos, el trabajo del proyecto, `repos.yaml` y `main/` quedan siempre fuera del
+Modo D.
