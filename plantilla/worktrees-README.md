@@ -6,6 +6,8 @@ Una copia de trabajo del repo de código POR UNIDAD, con el mismo nombre que su 
 Reglas (las completas, en AGENTS.md):
 - Los crea el padre al despachar una unidad; los borra el ritual de cierre (con su rama).
 - El constructor escribe SOLO dentro del suyo.
-- Un worktree sin unidad activa es un huérfano: `lint_metodo.py` lo detecta como FAIL.
+- Un worktree sin ninguna ficha (ni activa ni archivada) es un huérfano de verdad:
+  `lint_metodo.py` lo detecta como FAIL. Si la ficha ya está archivada pero el worktree
+  sigue en disco (el cierre no pudo borrarlo), es un WARN: bórralo a mano.
 
 El repo de código y su remoto: ver `repos.yaml` en la raíz.

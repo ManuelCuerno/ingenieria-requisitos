@@ -850,11 +850,27 @@ en_obra = {
     if fm.get("estado") in {"en_obra", "en_revision"}
     and fm.get("ejecucion") != "documental"
 }
-for h in sorted(wt - set(unidades)):
+# cmd_cerrar archiva la ficha ANTES de correr este linter y ANTES de borrar el worktree
+# (orden necesario para poder restaurar los tres a la vez si el linter bloquea). En esa
+# ventana intermedia la unidad ya no está en `unidades` (que se salta archivo/): sin
+# distinguir este caso, un cierre legítimo se ve como huérfano y se revierte a sí mismo
+# (bug 003). PERO archivar no garantiza que el worktree se borrara: si `borrar_worktree`
+# falla (proceso vivo dentro, error de git), `cmd_cerrar` solo avisa y sigue — sin FAIL
+# aquí ese resto quedaría invisible PARA SIEMPRE (revisión ronda 1 del bug 003). Por eso
+# una unidad archivada con worktree en disco no es un OK silencioso: es un WARN que no
+# bloquea el cierre en curso pero tampoco se pierde si el borrado de verdad falló.
+archivo = RAIZ / "docs/05-trabajo/archivo"
+archivadas = {p.name for p in archivo.iterdir() if p.is_dir()} if archivo.is_dir() else set()
+huerfanos_reales = wt - set(unidades) - archivadas
+huerfanos_archivados = (wt - set(unidades)) & archivadas
+for h in sorted(huerfanos_reales):
     fail(f"worktree huérfano sin unidad: worktrees/{h} (¿cierre a medias?)")
+for h in sorted(huerfanos_archivados):
+    warn(f"worktrees/{h}: su unidad ya está archivada pero el worktree sigue en disco — "
+         f"bórralo a mano si el cierre no pudo hacerlo (o es la ventana normal de un cierre en curso)")
 for z in sorted(en_obra - wt):
     warn(f"unidad {z} en obra sin worktree (¿aún no despachada de verdad?)")
-if wt and not (wt - set(unidades)):
+if wt and not huerfanos_reales and not huerfanos_archivados:
     ok(f"worktrees coherentes con unidades: {sorted(wt)}")
 elif not wt:
     ok("sin worktrees")

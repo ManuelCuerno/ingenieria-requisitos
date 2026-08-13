@@ -1969,15 +1969,25 @@ def cmd_estado(_args):
     if esperando:
         warn(f"{len(esperando)} unidad(es) esperando a que el usuario pruebe la app: "
              f"{', '.join(esperando)} — no cuentan para el tope, pero tampoco están cerradas")
-    for huerfano in sorted(set(wt) - set(unidades)):
+    # Mismo criterio que lint_metodo.py sección 5 (bug 003): una unidad archivada con
+    # worktree aún en disco no es un huérfano ciego — es un resto que puede necesitar
+    # borrado manual si `borrar_worktree` falló, así que avisa en vez de fallar en
+    # silencio o de callarse del todo.
+    archivadas = {p.name for p in ARCHIVO.iterdir() if p.is_dir()} if ARCHIVO.is_dir() else set()
+    huerfanos_reales = set(wt) - set(unidades) - archivadas
+    huerfanos_archivados = (set(wt) - set(unidades)) & archivadas
+    for huerfano in sorted(huerfanos_reales):
         fail(f"worktree sin unidad: worktrees/{huerfano} (¿cierre a medias?)")
+    for huerfano in sorted(huerfanos_archivados):
+        warn(f"worktrees/{huerfano}: su unidad ya está archivada pero el worktree sigue "
+             f"en disco — bórralo a mano si el cierre no pudo hacerlo")
     requieren_wt = [
         n for n in activas
         if unidades[n]["fm"].get("ejecucion") != "documental"
     ]
     for sin_wt in [n for n in requieren_wt if n not in wt]:
         warn(f"unidad {sin_wt} en obra SIN worktree (¿despachada de verdad?)")
-    if wt and not (set(wt) - set(unidades)) and all(n in wt for n in requieren_wt):
+    if wt and not huerfanos_reales and not huerfanos_archivados and all(n in wt for n in requieren_wt):
         ok("worktrees y unidades casan")
 
     nnn, _ = siguiente_nnn()
