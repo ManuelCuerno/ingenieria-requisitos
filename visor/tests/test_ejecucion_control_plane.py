@@ -1,6 +1,7 @@
 import json
 import os
 import hashlib
+import re
 import select
 import shutil
 import stat
@@ -571,6 +572,270 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertNotEqual(resultado_mutante.returncode, 0)
         self.assertIn("cwd", resultado_mutante.stderr.lower())
         self.assertFalse((self.worktree / ".harness-record.json").exists())
+
+
+class LanzadorHarnessClaudeDeFabricaTest(ControlPlaneE2ETest):
+    """Bug 001-lanzador-harness-claude: el camino claude no funciona de fábrica.
+
+    Cada test reproduce uno de los defectos de la ficha docs/bugs/001-… del
+    workspace que reportó la caja negra de campo (12-08-2026). E2E sobre el
+    fixture donde el defecto es observable en argv/entorno/política; a nivel de
+    módulo (el fichero ORIGINAL, patrón de test_ejecucion_gate_real) donde el
+    defecto vive en el perfil seatbelt o en el probe.
+    """
+
+    def modulo_original(self):
+        import importlib.util
+
+        origen = RAIZ / "plantilla/docs/00-metodo/scripts"
+        spec = importlib.util.spec_from_file_location(
+            "ejecucion_original", origen / "ejecucion.py"
+        )
+        modulo = importlib.util.module_from_spec(spec)
+        anterior = sys.path[:]
+        sys.path.insert(0, str(origen))
+        try:
+            spec.loader.exec_module(modulo)
+        finally:
+            sys.path[:] = anterior
+        return modulo
+
+    def perfil_seatbelt(self, modulo, harness="claude"):
+        base = Path(self.temporal.name) / "perfil-seatbelt"
+        worktree = base / "worktrees/009-demo"
+        gitdir = base / "main/.git/worktrees/009-demo"
+        common = base / "main/.git"
+        tmp_privado = base / "tmp"
+        documento = base / "docs/bugs/009-demo.md"
+        for ruta in (worktree, gitdir, common, tmp_privado, documento.parent):
+            ruta.mkdir(parents=True, exist_ok=True)
+        documento.write_text("# doc\n", encoding="utf-8")
+        politica, _ = modulo.perfil_sandbox(
+            "seatbelt", "/usr/bin/sandbox-exec", worktree, gitdir, common,
+            tmp_privado, "constructor", harness, documentos=(documento,),
+        )
+        texto = (tmp_privado / "seatbelt.sb").read_text(encoding="utf-8")
+        return politica, texto, documento, common
+
+    # --- Defecto 2: el CLI rechaza --mcp-config {} (exige la clave mcpServers)
+
+    @SOLO_POSIX
+    def test_mcp_config_declara_mcpservers(self):
+        resultado = self.ejecutar()
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        harness, _ = self.registros()
+        argv = harness["argv"]
+        mcp = json.loads(argv[argv.index("--mcp-config") + 1])
+        self.assertIn("mcpServers", mcp, "el CLI de claude rechaza un mcp-config sin la clave mcpServers")
+
+    # --- Defecto 6: dontAsk deniega Write/Edit en headless; debe ser bypassPermissions
+
+    @SOLO_POSIX
+    def test_permission_mode_no_es_dontask(self):
+        resultado = self.ejecutar()
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        harness, _ = self.registros()
+        argv = harness["argv"]
+        modo = argv[argv.index("--permission-mode") + 1]
+        self.assertEqual(
+            modo, "bypassPermissions",
+            "dontAsk deniega por defecto en headless; la seguridad real la impone el sandbox de SO",
+        )
+
+    # --- Defecto 4: claude debe arrancar con HOME aislado y escribible (como codex)
+
+    @SOLO_POSIX
+    def test_claude_usa_home_aislado(self):
+        resultado = self.ejecutar()
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        harness, _ = self.registros()
+        self.assertNotEqual(
+            harness["home"], str(self.home),
+            "el HOME real del usuario no es escribible dentro del sandbox: claude necesita un HOME aislado",
+        )
+        # Comparar solo desigualdad era vacuo (resolve() ya las hacía distintas):
+        # lo que aprieta es que el HOME viva DENTRO del tmp privado, como en codex.
+        self.assertTrue(
+            harness["home"].startswith(harness["tmp"]),
+            f"el HOME aislado debe vivir dentro del tmp privado: {harness['home']} vs {harness['tmp']}",
+        )
+
+    # --- Defecto 5 (mitad lecturas): el constructor debe poder leer docs/ del meta-repo
+
+    @SOLO_POSIX
+    def test_add_dir_incluye_docs_del_workspace(self):
+        resultado = self.ejecutar()
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        harness, _ = self.registros()
+        argv = harness["argv"]
+        directorios = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--add-dir"]
+        self.assertIn(
+            str((self.ws / "docs").resolve()), directorios,
+            "el contrato manda leer bias/flujos/síntesis: docs/ del meta-repo debe ir en --add-dir",
+        )
+
+    # --- Defecto 7: sin el almacén común escribible no hay commit/push
+
+    @SOLO_POSIX
+    def test_politica_permite_el_almacen_git_comun(self):
+        resultado = self.ejecutar()
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        _, sandbox = self.registros()
+        permitidas = sandbox["policy"]["filesystem"]["allowWrite"]
+        self.assertIn(
+            str((self.main / ".git").resolve()), permitidas,
+            "objetos y refs viven en main/.git (common): sin él, git commit/push fallan con EPERM",
+        )
+
+    # --- Defecto 11: el revisor exige modelo DISTINTO (regla 10); falta --modelo
+
+    @SOLO_POSIX
+    def test_lanzar_acepta_modelo_explicito(self):
+        argv = self.argumentos()
+        argv[argv.index("--rol"):argv.index("--rol")] = ["--modelo", "claude-opus-5"]
+        resultado = subprocess.run(
+            argv, cwd=self.main, env=self.env, text=True, capture_output=True
+        )
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        harness, _ = self.registros()
+        registrado = harness["argv"]
+        self.assertIn("--model", registrado)
+        self.assertEqual(registrado[registrado.index("--model") + 1], "claude-opus-5")
+
+    # --- Defectos 3 y 8: credenciales de suscripción y de GitHub deben heredarse
+
+    def test_heredar_env_incluye_credenciales_de_claude_y_github(self):
+        modulo = self.modulo_original()
+        for variable in ("CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+            self.assertIn(
+                variable, modulo.HEREDAR_ENV,
+                f"sin {variable} el subagente no puede autenticarse dentro del sandbox",
+            )
+
+    # --- Defecto 9: un HOME recién creado no tiene credential helper de git
+
+    @SOLO_POSIX
+    def test_preparar_claude_home_existe_y_configura_git(self):
+        modulo = self.modulo_original()
+        self.assertTrue(
+            hasattr(modulo, "preparar_claude_home"),
+            "falta preparar_claude_home(), simétrica a preparar_codex_home()",
+        )
+        gh_registro = Path(self.temporal.name) / "gh-setup-git.json"
+        self.hacer_ejecutable(
+            self.bin / "gh",
+            "#!/usr/bin/env python3\n"
+            "import json, os, pathlib, sys\n"
+            f"pathlib.Path({str(gh_registro)!r}).write_text(json.dumps(\n"
+            "    {'argv': sys.argv[1:], 'home': os.environ.get('HOME')}))\n",
+        )
+        tmp_privado = Path(self.temporal.name) / "tmp-claude-home"
+        tmp_privado.mkdir()
+        (self.home / ".gitconfig").write_text(
+            "[user]\n\tname = Tester De Campo\n\temail = tester@example.com\n",
+            encoding="utf-8",
+        )
+        env = {"PATH": str(self.bin) + os.pathsep + os.environ.get("PATH", ""),
+               "GH_TOKEN": "gho_token_de_prueba"}
+        modulo.preparar_claude_home(env, tmp_privado, self.home)
+        self.assertNotEqual(env["HOME"], str(self.home))
+        self.assertTrue(Path(env["HOME"]).is_dir())
+        self.assertTrue(gh_registro.is_file(), "con GH_TOKEN presente debe correr gh auth setup-git")
+        registro = json.loads(gh_registro.read_text())
+        self.assertEqual(registro["argv"][:2], ["auth", "setup-git"])
+        self.assertEqual(registro["home"], env["HOME"])
+        # Sin identidad, git firmaría con un ident autodetectado falso (o moriría en
+        # hosts sin FQDN, WSL2 incluido): la identidad del HOME original debe viajar.
+        ident = subprocess.run(
+            ["git", "config", "--get", "user.name"],
+            env={"HOME": env["HOME"], "PATH": env["PATH"]},
+            capture_output=True, text=True,
+        )
+        self.assertEqual(
+            ident.stdout.strip(), "Tester De Campo",
+            "la identidad de git del usuario debe copiarse al HOME aislado",
+        )
+
+    # --- Defecto 1: el perfil seatbelt no declara /dev/null y git muere (exit 128)
+
+    def test_seatbelt_declara_dev_null(self):
+        modulo = self.modulo_original()
+        _, texto, _, _ = self.perfil_seatbelt(modulo)
+        self.assertIn(
+            '(literal "/dev/null")', texto,
+            "git necesita leer y escribir /dev/null; sin la regla, branch --show-current devuelve vacío",
+        )
+
+    # --- Defecto 5 (mitad estado del CLI): la ruta fija /private/tmp/claude-<uid>
+
+    @unittest.skipUnless(
+        sys.platform == "darwin",
+        "la ruta /private/tmp/claude-<uid> es un contrato del CLI en macOS; en el "
+        "resto de plataformas el bloque ni se ejecuta (seatbelt solo existe en darwin)",
+    )
+    def test_seatbelt_incluye_estado_del_cli_claude(self):
+        modulo = self.modulo_original()
+        politica, _, _, _ = self.perfil_seatbelt(modulo, harness="claude")
+        permitidas = politica["filesystem"]["allowWrite"]
+        estado = [ruta for ruta in permitidas if f"/tmp/claude-{os.getuid()}" in ruta]
+        self.assertTrue(
+            estado,
+            f"el CLI guarda estado de sesión en /private/tmp/claude-{os.getuid()}/…: sin esa ruta, EPERM al arrancar",
+        )
+        self.addCleanup(shutil.rmtree, estado[0], True)
+        # Con (deny default), permitir una hoja que no existe no sirve: el padre
+        # claude-<uid> no es escribible, así que la hoja se pre-crea fuera del sandbox.
+        self.assertTrue(
+            Path(estado[0]).is_dir(),
+            "la ruta de estado debe pre-crearse fuera del sandbox (su padre no es escribible)",
+        )
+
+    # --- Defecto 10: guardado atómico de documentos (temporal hermano + rename)
+
+    def test_seatbelt_permite_guardado_atomico_de_documentos(self):
+        modulo = self.modulo_original()
+        _, texto, documento, _ = self.perfil_seatbelt(modulo)
+        # Mirar solo que exista "(regex" dejó pasar una regla inerte (revisión ronda 1):
+        # aquí se comprueba la SEMÁNTICA — el patrón debe casar con el temporal hermano
+        # y no con un fichero sin relación del mismo directorio.
+        patrones = [p.replace('\\"', '"')
+                    for p in re.findall(r'\(regex #"([^"]+)"\)', texto)]
+        self.assertTrue(patrones, "falta la regla de hermanos por documento en el perfil")
+        hermano = str(documento) + ".tmp1234"
+        ajeno = str(documento.parent / "otro-fichero.md")
+        self.assertTrue(
+            any(re.fullmatch(patron, hermano) for patron in patrones),
+            f"la regla debe CASAR con el temporal hermano del guardado atómico: {patrones}",
+        )
+        self.assertFalse(
+            any(re.fullmatch(patron, ajeno) for patron in patrones),
+            "la regla no debe abrir el directorio a ficheros sin relación",
+        )
+
+    @SOLO_POSIX
+    def test_codex_no_recibe_lecturas_como_escribibles(self):
+        resultado = self.ejecutar(harness="codex")
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        harness, _ = self.registros()
+        argv = harness["argv"]
+        directorios = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--add-dir"]
+        # En codex --add-dir significa "directorio ESCRIBIBLE adicional" (su --help):
+        # las lecturas de docs/ son un asunto exclusivo del harness claude.
+        self.assertNotIn(
+            str((self.ws / "docs").resolve()), directorios,
+            "docs/ entero no debe declararse escribible en la capa codex",
+        )
+
+    def test_probe_ejercita_el_guardado_atomico(self):
+        modulo = self.modulo_original()
+        self.assertNotIn(
+            ".open('a')", modulo.PROBE,
+            "abrir en modo append pasa con el permiso viejo y no detecta el hueco",
+        )
+        self.assertIn(
+            "with_name(", modulo.PROBE,
+            "el probe debe crear y borrar un temporal hermano del documento, el patrón real de guardado",
+        )
 
 
 if __name__ == "__main__":
