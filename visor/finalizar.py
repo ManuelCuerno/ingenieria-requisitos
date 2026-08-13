@@ -8,6 +8,7 @@ constitución y flows, conserva ``main/`` y deja ambos repos enlazados.
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -87,6 +88,23 @@ def congelar_planos(mapa):
         )
 
 
+def reescribir_enlaces_indice(texto):
+    """compilar.py escribe el índice con las rutas de SU carpeta temporal
+    (01-constitution/constitution.md, 02-flows/AREA/ID.md); este volcado renombra la
+    constitución y aplana todas las actividades como hermanas del propio índice — sin
+    reescribir los enlaces, el 100% apuntaba a rutas que nunca existieron (bug 005)."""
+    texto = texto.replace(
+        "](01-constitution/constitution.md)", "](../01-constitucion/manifiesto.md)"
+    )
+    texto = re.sub(r"\]\(02-flows/(?:[^)]+/)?([^/)]+\.md)\)", r"](\1)", texto)
+    # No es un enlace, pero nombra una carpeta que tras aplanar no existe en el
+    # destino — mismo síntoma (hace dudar si el proyecto está mal creado).
+    return texto.replace(
+        "- `02-flows/`: un documento por actividad.",
+        "- un documento por actividad, en esta misma carpeta.",
+    )
+
+
 def copiar_documentacion(workspace, salida):
     constitucion = salida / "01-constitution" / "constitution.md"
     flows = salida / "02-flows"
@@ -99,7 +117,8 @@ def copiar_documentacion(workspace, salida):
     for anterior in destino_flows.glob("*.md"):
         anterior.unlink()
     indice = salida / "README.md"
-    shutil.copyfile(indice, destino_flows / "INDICE.md")
+    texto_indice = reescribir_enlaces_indice(indice.read_text(encoding="utf-8"))
+    (destino_flows / "INDICE.md").write_text(texto_indice, encoding="utf-8")
     for documento in sorted(flows.rglob("*.md")):
         nombre = documento.stem + ".md"
         if (destino_flows / nombre).exists():
