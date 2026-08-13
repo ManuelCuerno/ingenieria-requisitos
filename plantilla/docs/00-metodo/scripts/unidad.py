@@ -1355,13 +1355,16 @@ def fecha_ok(valor):
 
 
 def veredicto_elegido(texto):
-    """El veredicto de la revisión, o None si sigue siendo el menú de la plantilla."""
+    """El veredicto de la revisión MÁS RECIENTE, o None si sigue siendo el menú de la
+    plantilla. hallazgos.md acumula una ronda de revisión debajo de otra: quedarse con
+    la primera coincidencia devolvía el veredicto superado de la 1ª ronda (bug 004)."""
+    elegido = None
     for m in RE_VEREDICTO.finditer(texto):
         valor = m.group(1).strip().strip("*").strip()   # `**Veredicto:** LIMPIO` → `LIMPIO`
         if "|" in valor or not valor or valor in {"—", "-"}:
             continue                                   # menú sin elegir o hueco vacío
-        return valor
-    return None
+        elegido = valor
+    return elegido
 
 
 def sin_cosechar(texto):
