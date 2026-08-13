@@ -128,7 +128,7 @@ def recursos_de(datos):
     return sorted(recursos)
 
 
-def ficha_unidad(nombre):
+def ficha_unidad(nombre, rol=None):
     if not RE_NOMBRE.fullmatch(nombre):
         raise ErrorEjecucion("unidad inválida: se esperaba NNN-slug")
     candidatas = [
@@ -151,7 +151,11 @@ def ficha_unidad(nombre):
                     "solo en_obra/en_revision se ejecutan"
                 )
             carril = (datos.get("carril") or "normal").strip().lower()
-            if carril in {"directo", "expres", "exprés"}:
+            # Solo el CONSTRUCTOR queda vetado en directo/exprés (regla 1: en esos
+            # carriles construye el padre, a la vista del usuario). El revisor fresco
+            # sí se lanza por aquí en CUALQUIER carril — la frontera del revisor "no la
+            # relaja ningún carril" (ADR-017, ADR-022; bug 002 de campo, ADR-040).
+            if rol == "constructor" and carril in {"directo", "expres", "exprés"}:
                 raise ErrorEjecucion(
                     f"el carril {carril} lo construye el padre; no se lanza otro LLM"
                 )
@@ -857,7 +861,7 @@ def lanzar(args):
     manager = gestion_leases.LeaseManager(RAIZ)
     try:
         with manager.acquire(f"unit:{args.unidad}") as autoridad_unidad:
-            ficha, datos = ficha_unidad(args.unidad)
+            ficha, datos = ficha_unidad(args.unidad, rol=args.rol)
             recursos = recursos_de(datos)
             scopes_recursos = [f"resource:{ruta}" for ruta in recursos]
             contexto = (
@@ -866,7 +870,7 @@ def lanzar(args):
                 else contextlib.nullcontext(None)
             )
             with contexto as autoridad_recursos:
-                ficha_actual, datos_actuales = ficha_unidad(args.unidad)
+                ficha_actual, datos_actuales = ficha_unidad(args.unidad, rol=args.rol)
                 if ficha_actual != ficha or recursos_de(datos_actuales) != recursos:
                     raise ErrorEjecucion(
                         "la ficha o sus recursos cambiaron mientras se adquiría autoridad"

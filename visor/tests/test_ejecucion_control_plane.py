@@ -838,5 +838,42 @@ class LanzadorHarnessClaudeDeFabricaTest(ControlPlaneE2ETest):
         )
 
 
+class RevisorEnCarrilDirectoTest(ControlPlaneE2ETest):
+    """Bug 002-revisor-carril-directo: el revisor fresco debe poder lanzarse por el
+    control plane en carril directo/exprés (ADR-022, AGENTS.md regla 1); solo el
+    CONSTRUCTOR debe quedar rechazado en esos carriles."""
+
+    def crear_unidad_directo(self, nombre="002-demo"):
+        ficha = self.ws / "docs/05-trabajo" / nombre / "especificacion.md"
+        ficha.parent.mkdir(parents=True)
+        ficha.write_text(
+            "---\nnumero: 002\ntipo: feature\nestado: en_obra\ncarril: directo\n"
+            "ficheros: [app/demo.py]\n---\n# Demo directo\n",
+            encoding="utf-8",
+        )
+        (ficha.parent / "hallazgos.md").write_text("# Hallazgos\n", encoding="utf-8")
+        destino = self.ws / "worktrees" / nombre
+        self.git("worktree", "add", str(destino), "-b", nombre, "main", cwd=self.main)
+        return destino
+
+    @SOLO_POSIX
+    def test_revisor_se_lanza_en_carril_directo(self):
+        worktree = self.crear_unidad_directo()
+        resultado = self.ejecutar(rol="revisor", unidad="002-demo")
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        harness = json.loads((worktree / ".harness-record.json").read_text())
+        self.assertEqual(harness["branch"], "002-demo")
+
+    @SOLO_POSIX
+    def test_constructor_sigue_rechazado_en_carril_directo(self):
+        self.crear_unidad_directo()
+        resultado = self.ejecutar(rol="constructor", unidad="002-demo")
+        self.assertNotEqual(resultado.returncode, 0)
+        self.assertIn(
+            "el carril directo lo construye el padre",
+            resultado.stdout + resultado.stderr,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
