@@ -1753,6 +1753,90 @@ class LintPeticionesTest(unittest.TestCase):
         self.assertIn("deploy", resultado.stdout.lower())
         self.assertIn("sin ficha desplegada y completa", resultado.stdout.lower())
 
+    def test_deploy_terminal_sin_repo_de_codigo_no_falla_duro(self):
+        # Mismo bug que el de exprés (ver test siguiente), pero en el otro sitio de
+        # lint_metodo.py que también resuelve repo_codigo() sin comprobar que exista:
+        # ficha_deploy_terminal_valida(). Una ficha de deploy completa y correcta no debe
+        # fallar solo porque el commit no se puede verificar contra un main/ ausente.
+        pid = "P-20260804-1234abcd"
+        commit = "d" * 40
+        # El ref de un deploy exige el patrón docs/(05-trabajo|bugs)/NNN-slug/despliegue.md
+        # (sección de resolución de canónica). Bajo docs/bugs/ evita arrastrar el escaneo de
+        # unidades de la sección 4 (que exige especificacion.md a cualquier NNN-slug directo
+        # bajo docs/05-trabajo): docs/bugs/ solo escanea *.md sueltos, no subcarpetas.
+        ficha = self.ws / "docs/bugs/001-release/despliegue.md"
+        ficha.parent.mkdir(parents=True)
+        ficha.write_text(
+            "---\nproceso: deploy\nestado: desplegado\n"
+            f"peticiones: [{pid}@1]\netapa: 1-lan\ncommit: {commit}\n"
+            "fecha: 2026-08-04\n---\n\n"
+            "# Despliegue verificado\n\n> `<HARD-GATE>` sin secretos.\n\n"
+            "- **Commit/tag:** " + commit + " · ya en main\n"
+            "- **Etapa destino y máquina exacta:** 1 LAN — servidor de pruebas\n"
+            "- **Qué cambia para el usuario, en una frase:** terminal corregida\n"
+            "- **OK del usuario ANTES de salir:** OK (2026-08-04, Nate)\n"
+            "- **Suite completa sobre este commit:** VERDE · .runtime/pre-deploy/full-suite.log\n"
+            "- **Seguridad sobre este commit:** VERDE · .runtime/pre-deploy/security.log\n"
+            "- **Qué se copió y adónde:** base y ficheros a backup externo\n"
+            "- **Volcado — comando y salida:** backup-db terminó correctamente\n"
+            "- **Restauración de prueba:** restaurada en staging; consultas verificadas\n"
+            "1. **Pasos**: actualizar servicio y reiniciar worker\n"
+            "2. **Vuelta atrás:** restaurar backup y volver al commit anterior\n"
+            "- **Flujo real de negocio de punta a punta:** alta completa — captura 42\n"
+            "- **Vigilancia:** monitor verde y error inocuo registrado — evento 84\n"
+            "- **Validación del usuario sobre la etapa desplegada:** OK (2026-08-04)\n"
+            "- **Resultado:** DESPLEGADO → sin incidencias\n"
+            "- **Quién y cuándo:** Nate — 2026-08-04 12:30\n"
+            "- **Anotado en `conocimiento/plano-deploy.md`:** LAN corre " + commit + "\n",
+            encoding="utf-8",
+        )
+        self.peticion(
+            pid=pid,
+            estado="cerrada",
+            procesos=[{
+                "tipo": "deploy",
+                "ref": "docs/bugs/001-release/despliegue.md",
+                "relacion": "satisface",
+                "revision": 1,
+                "estado": "terminal",
+            }],
+        )
+        self.assertFalse((self.ws / "main").exists())
+
+        resultado = self.ejecutar()
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertNotIn("sin ficha desplegada y completa", resultado.stdout.lower())
+
+    def test_expres_terminal_sin_repo_de_codigo_no_falla_duro(self):
+        # CI de un workspace-consumidor: main/ no existe (clon local gitignored que el
+        # workflow no clona aparte). El check de exprés terminal debe saltarse, igual que
+        # el resto del linter, en vez de fallar SIEMPRE por no poder resolver el repo.
+        pid = "P-20260804-1234abcd"
+        self.peticion(
+            pid=pid,
+            estado="cerrada",
+            procesos=[{
+                "tipo": "expres",
+                "ref": f"expres-{pid}-cambio",
+                "relacion": "satisface",
+                "revision": 1,
+                "estado": "terminal",
+                "metadata": {
+                    "base_sha": "deadbeef",
+                    "tip_sha": "cafebabe",
+                    "merge_sha": "cafebabe",
+                    "modo_fusion": "ancestry",
+                },
+            }],
+        )
+        self.assertFalse((self.ws / "main").exists())
+
+        resultado = self.ejecutar()
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertNotIn("sin cambio fusionado", resultado.stdout.lower())
+
 
 class PrePushPeticionesTest(unittest.TestCase):
     def setUp(self):
