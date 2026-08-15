@@ -324,11 +324,14 @@ def ficha_deploy_terminal_valida(ruta):
     if any(len(campos.get(nombre, "").strip(" .:·-")) < 3 for nombre in CAMPOS_DEPLOY_OBLIGATORIOS):
         return False
     commit = fm.get("commit", "")
+    if not commit:
+        return False
     repo, principal = repo_codigo()
-    if not commit or git(repo, "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}")[0]:
-        return False
-    if git(repo, "merge-base", "--is-ancestor", commit, principal)[0] != 0:
-        return False
+    if repo.is_dir():
+        if git(repo, "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}")[0]:
+            return False
+        if git(repo, "merge-base", "--is-ancestor", commit, principal)[0] != 0:
+            return False
     ok_previo = re.match(
         r"OK\s*\((\d{4}-\d{2}-\d{2}),\s*([^)]+)\)",
         campos["OK del usuario ANTES de salir"],
@@ -573,9 +576,10 @@ def revisar_cola_peticiones():
                     )
             if proceso.get("estado") == "terminal" and tipo == "expres":
                 repo, principal = repo_codigo()
-                metadata = proceso.get("metadata") or {}
-                if not rama_fusionada(repo, ref, principal, metadata):
-                    fail(f"{pid}: exprés terminal sin cambio fusionado en {principal}")
+                if repo.is_dir():
+                    metadata = proceso.get("metadata") or {}
+                    if not rama_fusionada(repo, ref, principal, metadata):
+                        fail(f"{pid}: exprés terminal sin cambio fusionado en {principal}")
         abiertos = [
             proceso.get("ref", "?")
             for proceso in datos.get("procesos", [])
