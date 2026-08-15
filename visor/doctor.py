@@ -28,6 +28,14 @@ for _salida in (sys.stdout, sys.stderr):
 BASE = Path(__file__).resolve().parent      # visor/
 RAIZ = BASE.parent                          # el clone
 
+# Mismas rutas que SANDBOX_CONFIABLES de plantilla/docs/00-metodo/scripts/ejecucion.py
+# (no se importa: el doctor solo mira si el ejecutable existe y aconseja; la
+# acreditación real — owner root, sin symlink, probe — la sigue haciendo el lanzador).
+SANDBOX_RUTAS = {
+    "darwin": (("sandbox-exec", "/usr/bin/sandbox-exec"), ("srt", "/usr/local/bin/srt")),
+    "linux": (("bwrap", "/usr/bin/bwrap"), ("srt", "/usr/local/bin/srt")),
+}
+
 
 def correr(*comando, cwd=None):
     """(ok, primera línea). Nunca lanza: lo ausente es un dato, no un error."""
@@ -127,18 +135,41 @@ def revisar_gh():
 
 
 def revisar_plataforma():
-    if sys.platform != "win32":
-        return "OK", f"{platform.system()} {platform.release()}", ""
-    avisos = []
-    if shutil.which("bash") is None:
-        avisos.append("sin bash: los hooks y gates en shell no correrán "
-                      "(bash viene con Git for Windows)")
-    if shutil.which("python3") is None:
-        avisos.append("aquí `python3` no existe: donde el manual diga python3, "
-                      "escribe `python`")
-    if avisos:
+    if sys.platform == "win32":
+        avisos = []
+        if shutil.which("bash") is None:
+            avisos.append("sin bash: los hooks y gates en shell no correrán "
+                          "(bash viene con Git for Windows)")
+        if shutil.which("python3") is None:
+            avisos.append("aquí `python3` no existe: donde el manual diga python3, "
+                          "escribe `python`")
+        # La entrevista y los planos funcionan tal cual (son solo Python), pero los
+        # carriles con subagente exigen la cerradura de sistema operativo que
+        # Windows nativo no tiene (sandbox.md, ADR-022): el camino soportado es WSL2.
+        avisos.append(
+            "la entrevista y los planos funcionan, pero los carriles normal/completo "
+            "y el revisor exigen sandbox de sistema operativo, que Windows nativo no "
+            "tiene: instala WSL2 (`wsl --install`), comprueba que `wsl -l -v` dice "
+            "VERSION 2 y trabaja dentro del disco de WSL, nunca en /mnt/c")
         return "WARN", f"Windows {platform.release()}", " · ".join(avisos)
-    return "OK", f"Windows {platform.release()} · bash y python3 presentes", ""
+
+    rutas = SANDBOX_RUTAS.get(sys.platform)
+    if rutas is None:
+        return "OK", f"{platform.system()} {platform.release()}", ""
+
+    mecanismo = next((nombre for nombre, ruta in rutas if Path(ruta).exists()), None)
+    if mecanismo:
+        return "OK", f"{platform.system()} {platform.release()} · sandbox OK ({mecanismo})", ""
+
+    if sys.platform == "linux":
+        # Incluye WSL2: dentro de WSL2, sys.platform también es "linux".
+        return "WARN", f"{platform.system()} {platform.release()}", (
+            "sin bwrap ni srt: el lanzador se negará a ejecutar carriles con "
+            "subagente — instala con `sudo apt install bubblewrap`")
+
+    # macOS sin sandbox-exec ni srt es un caso de laboratorio (sandbox-exec viene de
+    # serie): no cambia el comportamiento de hoy, solo se pierde la línea informativa.
+    return "OK", f"{platform.system()} {platform.release()}", ""
 
 
 REVISIONES = (

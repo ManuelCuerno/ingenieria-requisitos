@@ -2513,7 +2513,7 @@ python3 visor/proyectos.py contexto --todos</code></pre>
         </details>
         <details>
           <summary>¿Funciona en Windows?</summary>
-          <div>Los puntos de entrada son Python. Se usa <code>py</code> o <code>python</code> si ese es el nombre del intérprete. La preparación es <code>setup.py</code>, no un script de Bash.</div>
+          <div>La entrevista y los planos sí, tal cual: son solo Python (se usa <code>py</code> o <code>python</code> si ese es el nombre del intérprete; la preparación es <code>setup.py</code>, no un script de Bash). Lo que NO funciona en Windows nativo son los carriles normal/completo y el revisor: exigen una cerradura de sistema operativo (sandbox) que Windows nativo no tiene, así que el lanzador se niega a ejecutarlos — sin excepción, sin bypass. El camino soportado es <strong>WSL2</strong>: instálalo (<code>wsl --install</code>), comprueba con <code>wsl -l -v</code> que dice <code>VERSION 2</code> y trabaja siempre dentro del disco de WSL (nunca en <code>/mnt/c</code>, por rendimiento y por permisos). Dentro de WSL2, verificación de 30 segundos: <code>unshare -Ur true</code> y <code>bwrap --ro-bind / / true</code> deben salir bien; si no hay <code>bwrap</code>, instálalo con <code>sudo apt install bubblewrap</code>.</div>
         </details>
         <details>
           <summary>¿Por qué no hay una carpeta <code>tests/</code> en la herramienta?</summary>

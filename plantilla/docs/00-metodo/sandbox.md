@@ -22,6 +22,24 @@ frontera. Consecuencia honesta: en un macOS típico el mecanismo será Seatbelt,
 limita la red. Si no encuentra ningún mecanismo se niega a ejecutar. No hay bypass ni modo que
 solo imprima un perfil.
 
+## Windows: el camino oficial es WSL2
+
+Windows nativo no tiene ningún mecanismo con paridad (AppContainer rompe toolchains de
+desarrollo, los restricted tokens y los integrity levels no confinan filesystem ni red, Windows
+Sandbox no existe en Home, y `srt-win` sigue en alpha con breaking changes). No se implementa
+sandbox nativo Windows por eso: el lanzador se niega a ejecutar en `win32` y ese bloqueo se
+queda como está.
+
+El camino soportado es **WSL2**: el kernel oficial de Microsoft para WSL2 compila
+`CONFIG_USER_NS=y` y no trae AppArmor, así que los user namespaces sin privilegios que
+`bubblewrap` necesita funcionan sin ajuste alguno — dentro de WSL2, `sys.platform` es `"linux"`
+y el `bwrap` de `apt` pasa la misma acreditación que en Linux nativo. WSL1 no vale (no hay
+kernel Linux real). Condiciones operativas: workspace y home en el disco de WSL (nunca en
+`/mnt/c`: ahí el rendimiento cae, los locks de flock fallan y los permisos se corrompen en
+silencio), sin symlinks hacia `/mnt/c` en rutas que el sandbox monte. Verificación de 30
+segundos: `wsl -l -v` debe decir `VERSION 2`, y deben pasar `unshare -Ur true` y
+`bwrap --ro-bind / / true`. Si falta `bwrap`, `sudo apt install bubblewrap`.
+
 ## Límites ejecutables
 
 - Constructor: escritura en el worktree, su gitdir, los dos documentos exactos de su unidad
