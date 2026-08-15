@@ -34,6 +34,9 @@ jobs:
       - name: Suite del visor y del método
         run: python3 -m unittest discover -s visor/tests -p "test_*.py" -v
         shell: bash
+      - name: Suite del visor de contratos
+        run: python3 -m unittest discover -s visor_contratos/tests -p "test_*.py" -v
+        shell: bash
       - name: Validación del ejemplo del visor
         run: python3 visor/validar.py --datos visor/ejemplo.json
         shell: bash

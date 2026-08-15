@@ -23,6 +23,7 @@
 !/requirements-dev.txt
 !/plantilla/
 !/visor/
+!/visor_contratos/
 
 # Y dentro de lo versionado, la basura de siempre.
 __pycache__/
