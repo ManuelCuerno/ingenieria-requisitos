@@ -2,7 +2,10 @@
 """Control plane fail-closed para lanzar Claude o Codex en una unidad real.
 
 La unidad, el worktree y la rama se derivan; no se aceptan rutas ni argv arbitrarios.
-El proceso siempre nace dentro de un sandbox de SO y sin shell intermedia.
+El proceso nace siempre con el cwd, la rama y el entorno fijados por código (nunca por
+shell intermedia) — es la garantía que evitó el incidente Aurora (ADR-022). No hay sandbox
+de SO envolviendo al harness (unidad 012, ADR sucesor del 022): la frontera de escritura es
+el cwd correcto más la disciplina del contrato, igual que ya confía el carril directo.
 """
 import argparse
 import contextlib
@@ -31,8 +34,6 @@ WORKTREES = RAIZ / "worktrees"
 ESTADOS_EJECUTABLES = {"en_obra", "en_revision"}
 RE_NOMBRE = re.compile(r"^\d{3}-[a-z0-9][a-z0-9-]*$")
 RE_SKILL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$")
-SANDBOX_CONFIABLES = {"darwin": (("seatbelt", "/usr/bin/sandbox-exec"), ("srt", "/usr/local/bin/srt")), "linux": (("bwrap", "/usr/bin/bwrap"), ("srt", "/usr/local/bin/srt"))}
-EXIGIR_OWNER_SISTEMA = True
 
 # Estas skills deciden el proceso de trabajo. El método ya lo decide y nunca las importa,
 # aunque el operador intente incluirlas en la allowlist técnica.
@@ -58,10 +59,15 @@ HEREDAR_ENV = {
     "http_proxy", "https_proxy", "no_proxy", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
     "AWS_REGION", "AWS_DEFAULT_REGION", "CLAUDE_CODE_USE_BEDROCK",
     "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY",
-    # El sandbox bloquea el llavero del SO a propósito: la única autenticación posible
-    # dentro es por entorno. Sin estos tres, ni la suscripción de Claude (setup-token)
-    # ni git/gh contra GitHub funcionan en el subagente (bug 001, caja negra de campo).
+    # Unidad 012: sin sandbox de SO ya no es la ÚNICA vía de autenticación (Claude hereda
+    # el HOME real y su llavero), pero sigue siendo válida para CI/hosts sin sesión
+    # interactiva — se mantiene la allowlist explícita por higiene, no por necesidad.
     "CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN", "GITHUB_TOKEN",
+    # El llavero de macOS (Keychain, donde vive "Claude Code-credentials") exige USER/
+    # LOGNAME resueltos para servir el item aunque HOME sea el correcto: sin ellos
+    # `claude auth status` da loggedIn=false pese a heredar HOME real (verificado en
+    # sesión, unidad 012 — no es HOME lo que faltaba, es esto).
+    "USER", "LOGNAME",
 }
 
 
@@ -352,35 +358,27 @@ def preparar_codex_home(env, tmp_privado, home_original):
     env["CODEX_HOME"] = str(aislado)
 
 
-def preparar_claude_home(env, tmp_privado, home_original):
-    """HOME aislado y escribible para el CLI de claude, simétrico al de codex.
-
-    El HOME real no es escribible dentro del sandbox y el CLI necesita crear su
-    estado (~/.claude). La autenticación viaja por entorno (HEREDAR_ENV). Un HOME
-    recién creado tampoco tiene credential helper de git: si hay token de GitHub
-    y gh está instalado, se deja configurado con `gh auth setup-git`."""
-    aislado = tmp_privado / "home"
-    aislado.mkdir(mode=0o700)
-    env["HOME"] = str(aislado)
-    # La identidad de git viaja con el usuario: sin ella los commits del subagente
-    # saldrían con un ident autodetectado falso, y en hosts sin FQDN (WSL2 típico)
-    # git muere con "unable to auto-detect email address" (revisión ronda 1).
-    origen = {"HOME": str(home_original), "PATH": env.get("PATH", "")}
+def preparar_claude_home(env, home_original):
+    """Claude hereda el HOME real del usuario (unidad 012: ya no se aísla), sesión y
+    llavero de credenciales incluidos — es lo que resuelve la autenticación sin token
+    manual. Se conserva la comprobación de identidad de git y `gh auth setup-git` por si
+    el HOME real aún no los tiene configurados de forma global (hosts sin FQDN, WSL2
+    típico, "unable to auto-detect email address")."""
     for clave in ("user.name", "user.email"):
         valor = subprocess.run(
-            ["git", "config", "--get", clave], env=origen,
+            ["git", "config", "--get", clave], env=env,
             stdin=subprocess.DEVNULL, capture_output=True, text=True,
         )
-        if valor.returncode == 0 and valor.stdout.strip():
-            subprocess.run(
-                ["git", "config", "--global", clave, valor.stdout.strip()],
-                env=env, stdin=subprocess.DEVNULL, capture_output=True,
+        if valor.returncode != 0 or not valor.stdout.strip():
+            raise ErrorEjecucion(
+                f"git no tiene configurado {clave} en {home_original}; "
+                "configúralo antes de lanzar un constructor"
             )
     if env.get("GH_TOKEN") or env.get("GITHUB_TOKEN"):
         gh = shutil.which("gh", path=env.get("PATH"))
         if gh:
             subprocess.run(
-                [gh, "auth", "setup-git"], env=env, cwd=str(aislado),
+                [gh, "auth", "setup-git"], env=env, cwd=str(home_original),
                 stdin=subprocess.DEVNULL, capture_output=True,
             )
 
@@ -389,10 +387,10 @@ def argv_harness(harness, ejecutable, rol, worktree, texto, documentos=(), lectu
                  modelo=None):
     directorios = sorted({str(ruta.parent) for ruta in documentos})
     if harness == "claude":
-        # En claude --add-dir concede acceso de HERRAMIENTAS (lectura incluida) sin
-        # tocar el sandbox de SO: las lecturas viajan solo aquí. En codex --add-dir
-        # significa "directorio escribible adicional": pasarle docs/ cambiaría su
-        # política, así que codex no recibe lecturas (revisión ronda 1).
+        # En claude --add-dir concede acceso de HERRAMIENTAS (lectura incluida): las
+        # lecturas viajan solo aquí. En codex --add-dir significa "directorio escribible
+        # adicional": pasarle docs/ cambiaría su política, así que codex no recibe
+        # lecturas (revisión ronda 1).
         directorios = sorted(set(directorios) | {str(ruta) for ruta in lecturas})
         argv = [
             ejecutable,
@@ -405,7 +403,9 @@ def argv_harness(harness, ejecutable, rol, worktree, texto, documentos=(), lectu
             '{"mcpServers": {}}',
             "--no-session-persistence",
             # dontAsk deniega Write/Edit y Bash por defecto en headless: no es un modo
-            # permisivo. La seguridad real ya la impone el sandbox de SO (bug 001).
+            # permisivo (bug 001). Sin sandbox de SO (unidad 012) la única frontera de
+            # escritura es el cwd correcto más la disciplina del contrato de la unidad —
+            # riesgo aceptado explícitamente, igual que ya confía el carril directo.
             "--permission-mode",
             "bypassPermissions",
         ]
@@ -435,240 +435,6 @@ def argv_harness(harness, ejecutable, rol, worktree, texto, documentos=(), lectu
         argv.extend(("--add-dir", directorio))
     argv.append(texto)
     return argv
-
-
-def sbpl_path(ruta):
-    return str(ruta).replace("\\", "\\\\").replace('"', '\\"')
-
-
-def sbpl_regex(ruta):
-    # re.escape ya produce las barras correctas para el dialecto de regex del perfil;
-    # aquí SOLO se escapan las comillas del literal #"…". Pasar el resultado por
-    # sbpl_path duplicaría las barras y dejaría la regla inerte (revisión ronda 1,
-    # verificado contra sandbox-exec real).
-    return re.escape(str(ruta)).replace('"', '\\"')
-
-
-def sha256_fichero(ruta):
-    huella = hashlib.sha256()
-    with ruta.open("rb") as stream:
-        for bloque in iter(lambda: stream.read(1024 * 1024), b""):
-            huella.update(bloque)
-    return huella.hexdigest()
-
-
-def identidad_ejecutable_sandbox(mecanismo, encontrado, exigir_owner_sistema=True):
-    localizada = Path(os.path.abspath(encontrado))
-    try:
-        datos_localizados = localizada.lstat()
-    except OSError as exc:
-        raise ErrorEjecucion(f"no puedo acreditar el sandbox {mecanismo}: {exc}") from exc
-    if stat.S_ISLNK(datos_localizados.st_mode):
-        raise ErrorEjecucion(
-            f"el ejecutable del sandbox {mecanismo} es un symlink: {localizada}"
-        )
-    ruta = localizada.resolve(strict=True)
-    datos = ruta.stat()
-    if not stat.S_ISREG(datos.st_mode) or not os.access(ruta, os.X_OK):
-        raise ErrorEjecucion(f"el ejecutable del sandbox {mecanismo} no es regular/ejecutable")
-    if datos.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
-        raise ErrorEjecucion(
-            f"el ejecutable del sandbox {mecanismo} tiene permisos inseguros: {ruta}"
-        )
-    if exigir_owner_sistema and datos.st_uid != 0:
-        raise ErrorEjecucion(
-            f"el ejecutable del sandbox {mecanismo} no pertenece al sistema: {ruta}"
-        )
-    return {
-        "mecanismo": mecanismo,
-        "ruta": str(ruta),
-        "sha256": sha256_fichero(ruta),
-        "dispositivo": datos.st_dev,
-        "inode": datos.st_ino,
-        "owner_uid": datos.st_uid,
-        "owner_sistema_exigido": exigir_owner_sistema,
-    }
-
-
-def afirmar_ejecutable_sandbox(identidad):
-    actual = identidad_ejecutable_sandbox(
-        identidad["mecanismo"], identidad["ruta"],
-        identidad["owner_sistema_exigido"],
-    )
-    for clave in ("ruta", "sha256", "dispositivo", "inode", "owner_uid"):
-        if actual[clave] != identidad[clave]:
-            raise ErrorEjecucion(
-                f"el ejecutable del sandbox cambió después de validarlo: {identidad['ruta']}"
-            )
-
-
-def perfil_sandbox(mecanismo, ejecutable_sandbox, worktree, gitdir, common, tmp_privado, rol, harness,
-                   documentos=()):
-    escribibles = [tmp_privado]
-    if rol == "constructor":
-        # `common` (main/.git) guarda objetos y refs compartidos: sin él, commit y push
-        # desde el worktree mueren con EPERM (bug 001). hooks/ y config quedan protegidos
-        # por deny_write donde el mecanismo lo soporta.
-        escribibles = [worktree, gitdir, common, tmp_privado]
-    escribibles.extend(documentos)
-    if harness == "claude" and mecanismo == "seatbelt" and sys.platform == "darwin":
-        # El CLI guarda estado de sesión en una ruta fija fuera de HOME/TMPDIR:
-        # /private/tmp/claude-<uid>/<cwd con "/" → "-">. Sin ella, EPERM al arrancar.
-        # Se pre-crea aquí, fuera del sandbox: con (deny default) el CLI no podría
-        # crearla porque su padre claude-<uid> no es escribible (revisión ronda 1).
-        # Solo en darwin — /private y os.getuid no existen en las demás plataformas
-        # y este generador no debe hacer IO fuera de ellas (revisión ronda 2).
-        try:
-            padre = Path("/private/tmp") / f"claude-{os.getuid()}"
-            padre.mkdir(mode=0o700, exist_ok=True)
-            estado_cli = padre / str(worktree).replace(os.sep, "-")
-            estado_cli.mkdir(mode=0o700, exist_ok=True)
-        except OSError as exc:
-            raise ErrorEjecucion(
-                f"no puedo preparar la ruta de estado del CLI en {padre}: {exc}"
-            ) from exc
-        escribibles.append(estado_cli)
-    home = Path(os.path.expanduser("~"))
-    deny_read = [home / ".ssh", home / ".aws", home / ".config/gcloud"]
-    deny_write = [
-        common / "hooks",
-        common / "config",
-        worktree / ".claude/settings.json",
-        worktree / ".claude/settings.local.json",
-    ]
-    if mecanismo == "srt":
-        settings = {
-            "filesystem": {
-                "allowWrite": [str(ruta) for ruta in escribibles],
-                "denyWrite": [str(ruta) for ruta in deny_write],
-                "denyRead": [str(ruta) for ruta in deny_read],
-            },
-            "network": {"allowedDomains": (
-                ["api.anthropic.com"] if harness == "claude"
-                else ["api.openai.com", "chatgpt.com", "auth.openai.com"]
-            )},
-        }
-        ruta = tmp_privado / "srt-settings.json"
-        ruta.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-        ruta.chmod(0o600)
-        return settings, lambda argv: [ejecutable_sandbox, "--settings", str(ruta), "--", *argv]
-    if mecanismo == "seatbelt":
-        allow = " ".join(f'(subpath "{sbpl_path(r)}")' for r in escribibles)
-        dw = " ".join(f'(subpath "{sbpl_path(r)}")' for r in deny_write)
-        dr = " ".join(f'(subpath "{sbpl_path(r)}")' for r in deny_read)
-        # Guardado atómico (bug 001): Write/Edit crean un temporal HERMANO y renombran.
-        # El subpath sobre el fichero no lo permite; esta regla abre solo los hermanos
-        # que empiezan por el nombre del documento, no el directorio entero.
-        hermanos = " ".join(
-            f'(regex #"^{sbpl_regex(d)}[^/]*$")' for d in documentos
-        )
-        perfil = (
-            "(version 1)\n(deny default)\n(allow process*)\n(allow sysctl-read)\n"
-            "(allow file-read*)\n"
-            f"(deny file-read* {dr})\n"
-            f"(allow file-write* {allow})\n"
-            + (f"(allow file-write* {hermanos})\n" if hermanos else "")
-            # git abre /dev/null para leer y escribir en casi toda operación; sin esta
-            # regla muere con exit 128 y el probe ve la rama vacía (bug 001).
-            + '(allow file-read* file-write-data (literal "/dev/null"))\n'
-            + f"(deny file-write* {dw})\n"
-            "(allow network*)\n"
-        )
-        ruta = tmp_privado / "seatbelt.sb"
-        ruta.write_text(perfil, encoding="utf-8")
-        ruta.chmod(0o600)
-        policy = {"filesystem": {"allowWrite": [str(r) for r in escribibles]}}
-        return policy, lambda argv: [ejecutable_sandbox, "-f", str(ruta), *argv]
-    binds = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
-    binds += ["--bind", str(tmp_privado), str(tmp_privado)]
-    if rol == "constructor":
-        binds += ["--bind", str(worktree), str(worktree), "--bind", str(gitdir), str(gitdir),
-                  "--bind", str(common), str(common)]
-    for documento in documentos:
-        binds += ["--bind", str(documento), str(documento)]
-    policy = {"filesystem": {"allowWrite": [str(r) for r in escribibles]}}
-    return policy, lambda argv: [
-        ejecutable_sandbox, *binds, "--unshare-all", "--share-net", "--chdir", str(worktree), "--", *argv
-    ]
-
-
-def detectar_sandbox():
-    plataforma = "darwin" if sys.platform == "darwin" else "linux" if sys.platform.startswith("linux") else ""
-    for mecanismo, ruta in SANDBOX_CONFIABLES.get(plataforma, ()):
-        if Path(ruta).exists() or Path(ruta).is_symlink():
-            return identidad_ejecutable_sandbox(
-                mecanismo, ruta, exigir_owner_sistema=EXIGIR_OWNER_SISTEMA
-            )
-    raise ErrorEjecucion("no hay sandbox de SO disponible; ejecución bloqueada")
-
-
-PROBE = r'''# CONTROL_PLANE_PROBE
-import json, os, pathlib, subprocess
-paths = json.loads(__import__('sys').argv[1])
-out = {}
-for name, raw in paths.items():
-    path = pathlib.Path(raw)
-    try:
-        if name.startswith('doc'):
-            # El patron real de guardado (Write/Edit, editores): crear un temporal
-            # HERMANO y renombrar. Abrir en modo append pasaba con el permiso viejo
-            # y no detectaba el hueco (bug 001).
-            hermano = path.with_name(path.name + '.probe')
-            with hermano.open('w') as flujo:
-                flujo.write('probe')
-            hermano.unlink()
-        else:
-            path.write_text('probe')
-    except OSError:
-        out[name] = False
-    else:
-        out[name] = True
-        if not name.startswith('doc'):
-            path.unlink()
-out['cwd'] = os.getcwd()
-out['pwd'] = os.environ.get('PWD')
-out['branch'] = subprocess.run(['git', 'branch', '--show-current'], text=True,
-                               capture_output=True).stdout.strip()
-print(json.dumps(out))
-'''
-
-
-def verificar_sandbox(envuelto, env, worktree, tmp_privado, rol, documentos=()):
-    sufijo = uuid.uuid4().hex
-    rutas = {
-        "outside": str(RAIZ / ".runtime" / f"probe-outside-{sufijo}"),
-        "worktree": str(worktree / f".probe-worktree-{sufijo}"),
-        "tmp": str(tmp_privado / f"probe-tmp-{sufijo}"),
-    }
-    for indice, documento in enumerate(documentos):
-        rutas[f"doc{indice}"] = str(documento)
-    resultado = subprocess.run(
-        envuelto([sys.executable, "-c", PROBE, json.dumps(rutas)]),
-        cwd=str(worktree), env=env, text=True, capture_output=True,
-    )
-    if resultado.returncode:
-        raise ErrorEjecucion(f"el probe del sandbox no pudo ejecutarse: {resultado.stderr.strip()}")
-    try:
-        observado = json.loads(resultado.stdout.strip().splitlines()[-1])
-    except (IndexError, json.JSONDecodeError) as exc:
-        raise ErrorEjecucion("el probe del sandbox no devolvió evidencia válida") from exc
-    esperado = {
-        "outside": False,
-        "worktree": rol == "constructor",
-        "tmp": True,
-        "cwd": str(worktree),
-        "pwd": str(worktree),
-        "branch": worktree.name,
-    }
-    for indice, _ in enumerate(documentos):
-        esperado[f"doc{indice}"] = True
-    if observado != esperado:
-        for nombre, ruta in rutas.items():
-            if not nombre.startswith("doc"):
-                Path(ruta).unlink(missing_ok=True)
-        raise ErrorEjecucion(
-            f"sandbox no cumple la política: observado={observado}, esperado={esperado}"
-        )
 
 
 def evidencia_git(worktree):
@@ -710,10 +476,6 @@ def checkpoint(recibo, nombre, estado, detalle):
 
 
 def _lanzar_bajo_lease(args, ficha, manager, autoridades):
-    # El sandbox se acredita ANTES que nada: donde no hay mecanismo (Windows) el
-    # rechazo debe ser un mensaje en claro, no un traceback de un paso posterior.
-    sandbox_ejecutable = detectar_sandbox()
-    mecanismo = sandbox_ejecutable["mecanismo"]
     worktree, gitdir, common = resolver_worktree(args.unidad)
     home_original = Path(os.environ.get("HOME", str(Path.home()))).resolve()
     texto = encargo(
@@ -750,10 +512,6 @@ def _lanzar_bajo_lease(args, ficha, manager, autoridades):
         "rol": args.rol,
         "cwd": str(worktree),
         "rama": args.unidad,
-        "sandbox": mecanismo,
-        "sandbox_ejecutable": {
-            clave: sandbox_ejecutable[clave] for clave in ("ruta", "sha256")
-        },
         "lease": {
             "session_id": manager.session_id,
             "fencing": {
@@ -782,50 +540,31 @@ def _lanzar_bajo_lease(args, ficha, manager, autoridades):
         if args.harness == "codex":
             preparar_codex_home(env, tmp, home_original)
         else:
-            preparar_claude_home(env, tmp, home_original)
+            preparar_claude_home(env, home_original)
         argv = argv_harness(
             args.harness, ejecutable, args.rol, worktree, texto, documentos=documentos,
             # El contrato de la unidad manda leer bias, flujos y la síntesis de su
             # petición: docs/ del meta-repo viaja como lectura de herramientas del
-            # harness claude (los escribibles del sandbox de SO no cambian; codex
-            # la ignora porque su --add-dir significa escribible).
+            # harness claude (sin sandbox de SO, --add-dir sigue siendo la única vía
+            # explícita de lectura adicional; codex la ignora porque su --add-dir
+            # significa escribible).
             lecturas=(RAIZ / "docs",),
             modelo=getattr(args, "modelo", None),
         )
-        _, envuelto = perfil_sandbox(
-            mecanismo, sandbox_ejecutable["ruta"], worktree, gitdir, common, tmp,
-            args.rol, args.harness,
-            documentos=documentos
-        )
         try:
             for autoridad in autoridades:
                 autoridad.assert_owner()
-            afirmar_ejecutable_sandbox(sandbox_ejecutable)
-            verificar_sandbox(
-                envuelto, env, worktree, tmp, args.rol, documentos=documentos
-            )
-        except Exception as exc:
-            checkpoint(recibo, "sandbox", "fail", str(exc))
-            recibo["error"] = str(exc)
-            recibo["git"]["final"] = evidencia_git(worktree)
-            guardar_recibo(ruta_recibo, recibo)
-            if isinstance(exc, ErrorEjecucion):
-                raise
-            raise ErrorEjecucion(f"falló el probe del sandbox: {exc}") from exc
-        checkpoint(recibo, "sandbox", "ok", f"probe {mecanismo} conforme")
-        guardar_recibo(ruta_recibo, recibo)
-        try:
-            for autoridad in autoridades:
-                autoridad.assert_owner()
-            afirmar_ejecutable_sandbox(sandbox_ejecutable)
             gestion_leases.failpoint("ejecucion_antes_harness")
             # stdin CERRADO: el harness delegado corre sin nadie al otro lado — cualquier
             # cosa que pregunte por stdin (git, ssh, un instalador) se quedaba esperando
             # una respuesta que no puede llegar, y el padre lo veía como un cuelgue mudo
             # de minutos (feedback de campo 06-08, ADR-026).
             tope = getattr(args, "tope_minutos", 0) or 0
+            # argv como lista, cwd fijado por código, sin sandbox de SO ni shell
+            # intermedia (unidad 012: la garantía real, Aurora/ADR-022, era esto, no el
+            # aislamiento de SO).
             resultado = subprocess.run(
-                envuelto(argv), cwd=str(worktree), env=env,
+                argv, cwd=str(worktree), env=env,
                 stdin=subprocess.DEVNULL, timeout=tope * 60 if tope else None,
             )
         except subprocess.TimeoutExpired as exc:

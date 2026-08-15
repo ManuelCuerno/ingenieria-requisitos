@@ -1,8 +1,5 @@
 import json
 import os
-import hashlib
-import re
-import select
 import shutil
 import stat
 import subprocess
@@ -16,14 +13,6 @@ RAIZ = Path(__file__).resolve().parents[2]
 LAUNCHER = RAIZ / "plantilla/docs/00-metodo/scripts/ejecucion.py"
 WORKSPACE_PATHS = RAIZ / "plantilla/docs/00-metodo/scripts/workspace_paths.py"
 
-
-
-SOLO_POSIX = unittest.skipIf(
-    os.name == "nt",
-    "E2E con sandbox POSIX (srt/seatbelt/bwrap): en Windows no existe mecanismo "
-    "confiable y lanzar rechaza limpio — eso sí se prueba en "
-    "test_rechaza_sandbox_ausente_sin_bypass",
-)
 
 class ControlPlaneE2ETest(unittest.TestCase):
     def setUp(self):
@@ -70,8 +59,6 @@ class ControlPlaneE2ETest(unittest.TestCase):
 
         self.bin = self.base / "bin"
         self.bin.mkdir()
-        self.crear_doble_srt()
-        self.fijar_sandbox_de_fixture()
         self.crear_doble_harness("claude")
         self.crear_doble_harness("codex")
 
@@ -90,6 +77,13 @@ class ControlPlaneE2ETest(unittest.TestCase):
             encoding="utf-8",
         )
         (plugin / "plugin.json").write_text('{"name":"proceso"}\n', encoding="utf-8")
+        # HOME "real" de fixture con identidad de git configurada: unidad 012, Claude
+        # hereda este HOME tal cual (ya no lo aísla), así que necesita lo que un HOME
+        # real ya tendría.
+        (self.home / ".gitconfig").write_text(
+            "[user]\n\tname = Tester De Campo\n\temail = tester@example.com\n",
+            encoding="utf-8",
+        )
 
         self.env = os.environ.copy()
         self.env.update(
@@ -117,57 +111,6 @@ class ControlPlaneE2ETest(unittest.TestCase):
     def hacer_ejecutable(self, ruta, texto):
         ruta.write_text(texto, encoding="utf-8")
         ruta.chmod(ruta.stat().st_mode | stat.S_IXUSR)
-
-    def crear_doble_srt(self):
-        self.hacer_ejecutable(
-            self.bin / "srt",
-            """#!/usr/bin/env python3
-import json, os, pathlib, subprocess, sys
-args = sys.argv[1:]
-settings = pathlib.Path(args[args.index('--settings') + 1])
-policy = json.loads(settings.read_text())
-command = args[args.index('--') + 1:]
-if len(command) >= 3 and command[1] == '-c' and 'CONTROL_PLANE_PROBE' in command[2]:
-    paths = json.loads(command[3])
-    allowed = policy['filesystem']['allowWrite']
-    worktree_writable = any(paths['worktree'].startswith(path.rstrip('/') + '/')
-                            for path in allowed)
-    branch = subprocess.run(['git', 'branch', '--show-current'], text=True,
-                            capture_output=True).stdout.strip()
-    evidence = {'outside': False, 'worktree': worktree_writable, 'tmp': True,
-                'cwd': os.getcwd(), 'pwd': os.environ.get('PWD'), 'branch': branch}
-    for name, path in paths.items():
-        if name.startswith('doc'):
-            evidence[name] = path in allowed
-    print(json.dumps(evidence))
-    raise SystemExit(0)
-pathlib.Path('.sandbox-record.json').write_text(json.dumps({
-    'command': command,
-    'policy': policy,
-    'cwd': os.getcwd(),
-}))
-raise SystemExit(subprocess.run(command, env=os.environ.copy()).returncode)
-""",
-        )
-
-    def fijar_sandbox_de_fixture(self):
-        texto = self.launcher.read_text(encoding="utf-8")
-        lineas = []
-        reemplazada = False
-        for linea in texto.splitlines():
-            if linea.startswith("SANDBOX_CONFIABLES = "):
-                configuracion = {
-                    "darwin": (("srt", str((self.bin / "srt").resolve())),),
-                    "linux": (("srt", str((self.bin / "srt").resolve())),),
-                }
-                lineas.append(f"SANDBOX_CONFIABLES = {configuracion!r}")
-                reemplazada = True
-            elif linea == "EXIGIR_OWNER_SISTEMA = True":
-                lineas.append("EXIGIR_OWNER_SISTEMA = False")
-            else:
-                lineas.append(linea)
-        self.assertTrue(reemplazada)
-        self.launcher.write_text("\n".join(lineas) + "\n", encoding="utf-8")
 
     def crear_doble_harness(self, nombre):
         self.hacer_ejecutable(
@@ -232,6 +175,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         os.close(ready_write)
         os.close(wait_read)
         self.addCleanup(lambda: proceso.poll() is None and proceso.kill())
+        import select
         legibles, _, _ = select.select([ready_read], [], [], 5)
         self.assertEqual(legibles, [ready_read], "el launcher no alcanzó la barrera")
         self.assertEqual(os.read(ready_read, 1), b"1")
@@ -252,16 +196,13 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         return destino
 
     def registros(self):
-        harness = json.loads((self.worktree / ".harness-record.json").read_text())
-        sandbox = json.loads((self.worktree / ".sandbox-record.json").read_text())
-        return harness, sandbox
+        return json.loads((self.worktree / ".harness-record.json").read_text())
 
-    @SOLO_POSIX
     def test_claude_arranca_en_worktree_con_entorno_saneado_y_skill_tecnica(self):
         resultado = self.ejecutar(skills=("vue-best-practices",))
 
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
-        harness, sandbox = self.registros()
+        harness = self.registros()
         self.assertEqual(harness["cwd"], str(self.worktree.resolve()))
         self.assertEqual(harness["pwd"], str(self.worktree.resolve()))
         self.assertEqual(harness["branch"], self.unidad)
@@ -271,31 +212,15 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("--disable-slash-commands", harness["argv"])
         self.assertIn("--add-dir", harness["argv"])
         self.assertIn(str((self.ws / "docs/05-trabajo/001-demo").resolve()), harness["argv"])
-        comando = sandbox["command"]
-        self.assertNotIn("/bin/sh", comando)
-        self.assertNotIn("-c", comando)
         prompt = harness["argv"][-1]
         self.assertIn("CONTENIDO_TECNICO_PERMITIDO", prompt)
         self.assertNotIn("CONTENIDO_PROCESO_PROHIBIDO", prompt)
-        self.assertEqual(sandbox["policy"]["filesystem"]["allowWrite"][0],
-                         str(self.worktree.resolve()))
-        permitidas = sandbox["policy"]["filesystem"]["allowWrite"]
-        self.assertIn(
-            str((self.ws / "docs/05-trabajo/001-demo/especificacion.md").resolve()),
-            permitidas,
-        )
-        self.assertIn(
-            str((self.ws / "docs/05-trabajo/001-demo/hallazgos.md").resolve()),
-            permitidas,
-        )
-        self.assertNotIn(str((self.ws / "docs/05-trabajo/ESTADO.md").resolve()), permitidas)
 
-    @SOLO_POSIX
     def test_codex_usa_home_efimero_y_no_descubre_plugins_instalados(self):
         resultado = self.ejecutar(harness="codex")
 
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
-        harness, _ = self.registros()
+        harness = self.registros()
         self.assertNotEqual(harness["home"], str(self.home))
         self.assertEqual(harness["home"], harness["codex_home"])
         self.assertTrue(harness["home"].startswith(harness["tmp"]))
@@ -304,18 +229,20 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("--ephemeral", harness["argv"])
         self.assertNotIn("plugin-de-proceso", " ".join(harness["argv"]))
 
-    @SOLO_POSIX
     def test_prompt_con_flags_peligrosos_sigue_siendo_un_solo_argumento_literal(self):
+        # Unidad 012: sin sandbox de SO de por medio, la garantía la da por completo
+        # que ejecucion.py invoque argv como LISTA (subprocess.run, nunca shell=True):
+        # esto se verifica en el argv que el propio harness recibió, no en un wrapper.
         prompt = "explica --dangerously-skip-permissions; touch /mut048"
         resultado = self.ejecutar(prompt=prompt)
 
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
-        harness, sandbox = self.registros()
+        harness = self.registros()
         self.assertEqual(harness["argv"][-1].splitlines()[-1], prompt)
-        self.assertEqual(sandbox["command"].count(prompt), 0)
-        self.assertEqual(sum(prompt in arg for arg in sandbox["command"]), 1)
+        self.assertNotIn("/bin/sh", harness["argv"])
+        self.assertNotIn("-c", harness["argv"])
+        self.assertEqual(sum(prompt in arg for arg in harness["argv"]), 1)
 
-    @SOLO_POSIX
     def test_rechaza_skill_de_proceso_aunque_se_solicite(self):
         resultado = self.ejecutar(skills=("using-superpowers",))
 
@@ -323,7 +250,6 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("skill de proceso", resultado.stderr.lower())
         self.assertFalse((self.worktree / ".harness-record.json").exists())
 
-    @SOLO_POSIX
     def test_rechaza_alias_symlink_a_skill_de_proceso(self):
         alias = self.home / ".agents/skills/alias-tecnico"
         alias.symlink_to(self.home / ".agents/skills/using-superpowers",
@@ -335,7 +261,6 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("symlink", resultado.stderr.lower())
         self.assertFalse((self.worktree / ".harness-record.json").exists())
 
-    @SOLO_POSIX
     def test_rechaza_alias_cuyo_frontmatter_declara_skill_de_proceso(self):
         alias = self.home / ".agents/skills/alias-real"
         alias.mkdir()
@@ -350,7 +275,6 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("proceso", resultado.stderr.lower())
         self.assertFalse((self.worktree / ".harness-record.json").exists())
 
-    @SOLO_POSIX
     def test_rechaza_rama_distinta_antes_de_ejecutar_harness(self):
         self.git("checkout", "-b", "rama-intrusa", cwd=self.worktree)
 
@@ -360,7 +284,6 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("rama", resultado.stderr.lower())
         self.assertFalse((self.worktree / ".harness-record.json").exists())
 
-    @SOLO_POSIX
     def test_rechaza_carril_directo_sin_lanzar_otro_llm(self):
         ficha = self.ws / "docs/05-trabajo" / self.unidad / "especificacion.md"
         ficha.write_text(ficha.read_text().replace("carril: normal", "carril: directo"))
@@ -371,7 +294,6 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("padre", resultado.stderr.lower())
         self.assertFalse((self.worktree / ".harness-record.json").exists())
 
-    @SOLO_POSIX
     def test_rechaza_hallazgos_symlink_antes_de_lanzar_harness(self):
         hallazgos = self.ws / "docs/05-trabajo" / self.unidad / "hallazgos.md"
         exterior = self.ws / ".hallazgos-exterior.md"
@@ -387,80 +309,6 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertEqual(exterior.read_bytes(), contenido)
         self.assertFalse((self.worktree / ".harness-record.json").exists())
 
-    def test_rechaza_sandbox_ausente_sin_bypass(self):
-        (self.bin / "srt").rename(self.bin / "srt-ausente")
-        solo_harness = self.base / "solo-harness"
-        solo_harness.mkdir()
-        shutil.copy2(self.bin / "claude", solo_harness / "claude")
-        for programa in ("git", "python3"):
-            origen = shutil.which(programa)
-            self.assertIsNotNone(origen)
-            (solo_harness / programa).symlink_to(origen)
-        env = self.env.copy()
-        env["PATH"] = str(solo_harness)
-
-        resultado = subprocess.run(
-            [sys.executable, str(self.launcher), "lanzar", self.unidad,
-             "--harness", "claude", "--prompt", "Haz la tarea"],
-            cwd=self.main, env=env, text=True, capture_output=True,
-        )
-
-        self.assertNotEqual(resultado.returncode, 0)
-        self.assertIn("sandbox", resultado.stderr.lower())
-        self.assertFalse((self.worktree / ".harness-record.json").exists())
-
-    @SOLO_POSIX
-    def test_rechaza_wrapper_srt_symlink_antes_del_probe(self):
-        original = self.bin / "srt"
-        real = self.bin / "srt-real"
-        original.rename(real)
-        original.symlink_to(real)
-
-        resultado = self.ejecutar()
-
-        self.assertNotEqual(resultado.returncode, 0)
-        self.assertIn("symlink", resultado.stderr.lower())
-        self.assertFalse((self.worktree / ".harness-record.json").exists())
-
-    @SOLO_POSIX
-    def test_rechaza_wrapper_srt_escribible_por_grupo(self):
-        srt = self.bin / "srt"
-        srt.chmod(srt.stat().st_mode | stat.S_IWGRP)
-
-        resultado = self.ejecutar()
-
-        self.assertNotEqual(resultado.returncode, 0)
-        self.assertIn("permisos", resultado.stderr.lower())
-        self.assertFalse((self.worktree / ".harness-record.json").exists())
-
-    @SOLO_POSIX
-    def test_ignora_srt_falso_0755_que_aparece_antes_en_path(self):
-        falso_bin = self.base / "falso-bin"
-        falso_bin.mkdir()
-        marca = self.base / "srt-falso-ejecutado"
-        falso = falso_bin / "srt"
-        self.hacer_ejecutable(
-            falso,
-            "#!/usr/bin/env python3\n"
-            "from pathlib import Path\n"
-            f"Path({str(marca)!r}).write_text('ejecutado')\n",
-        )
-        falso.chmod(0o755)
-        env = self.env.copy()
-        env["PATH"] = str(falso_bin) + os.pathsep + env["PATH"]
-
-        resultado = self.ejecutar(env=env)
-
-        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
-        self.assertFalse(marca.exists())
-        recibo = json.loads(next(
-            (self.ws / ".runtime/ejecuciones").glob("001-demo-*.json")
-        ).read_text(encoding="utf-8"))
-        self.assertEqual(
-            recibo["sandbox_ejecutable"]["ruta"], str((self.bin / "srt").resolve())
-        )
-
-    @SOLO_POSIX
     def test_dos_launchers_de_la_misma_unidad_no_solapan(self):
         primero, gate = self.proceso_en_barrera()
         segundo = self.ejecutar(env={**self.env, "IR_SESSION_ID": "ejecucion-b"})
@@ -474,7 +322,6 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         recibos = list((self.ws / ".runtime/ejecuciones").glob("001-demo-*.json"))
         self.assertEqual(len(recibos), 1)
 
-    @SOLO_POSIX
     def test_dos_unidades_con_el_mismo_recurso_no_solapan(self):
         segunda = "002-paralela"
         self.crear_unidad_paralela(segunda, "app/demo.py")
@@ -494,21 +341,6 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
             (self.ws / "worktrees" / segunda / ".harness-record.json").exists()
         )
 
-    @SOLO_POSIX
-    def test_revisor_solo_puede_firmar_hallazgos_de_su_unidad(self):
-        resultado = self.ejecutar(rol="revisor")
-
-        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
-        harness, sandbox = self.registros()
-        self.assertEqual(sandbox["policy"]["filesystem"]["allowWrite"],
-                         [
-                             harness["tmp"],
-                             str((self.ws / "docs/05-trabajo/001-demo/hallazgos.md").resolve()),
-                         ])
-        self.assertNotIn(str(self.worktree),
-                         sandbox["policy"]["filesystem"]["allowWrite"])
-
-    @SOLO_POSIX
     def test_publica_resultado_con_checkpoints_verificables(self):
         resultado = self.ejecutar()
 
@@ -528,19 +360,17 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertEqual(recibo["git"]["inicial"]["head"], recibo["git"]["final"]["head"])
         self.assertRegex(recibo["git"]["inicial"]["diff_sha256"], r"^[0-9a-f]{64}$")
         self.assertIn("status_porcelain", recibo["git"]["final"])
-        sandbox = recibo["sandbox_ejecutable"]
-        self.assertEqual(sandbox["ruta"], str((self.bin / "srt").resolve()))
-        self.assertEqual(
-            sandbox["sha256"], hashlib.sha256((self.bin / "srt").read_bytes()).hexdigest()
-        )
+        # Unidad 012: sin sandbox de SO no hay campo sandbox/sandbox_ejecutable ni
+        # checkpoint "sandbox" — el recibo pasa directo de "identidad" a "harness".
+        self.assertNotIn("sandbox", recibo)
+        self.assertNotIn("sandbox_ejecutable", recibo)
         self.assertEqual(
             [item["nombre"] for item in recibo["checkpoints"]],
-            ["lease", "identidad", "sandbox", "harness"],
+            ["lease", "identidad", "harness"],
         )
         self.assertTrue(all(item["estado"] == "ok" for item in recibo["checkpoints"]))
         self.assertIn("RESULTADO", resultado.stdout)
 
-    @SOLO_POSIX
     def test_aurora_old_new_y_mutante_de_cwd(self):
         # OLD: un proceso heredado desde main ve el cwd equivocado y una variable vacía
         # convierte `$SCRATCH/mut048` en la ruta raíz observada en Aurora.
@@ -553,25 +383,27 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         observado_old = json.loads(old.stdout)
         self.assertEqual(observado_old, {"cwd": str(self.main.resolve()), "target": "/mut048"})
 
-        # NEW: el control plane corrige cwd antes de ejecutar el harness.
+        # NEW: el control plane corrige cwd antes de ejecutar el harness — por código,
+        # sin sandbox de SO de por medio (unidad 012: esta es la garantía que se
+        # mantiene íntegra).
         nuevo = self.ejecutar()
         self.assertEqual(nuevo.returncode, 0, nuevo.stdout + nuevo.stderr)
-        harness, _ = self.registros()
+        harness = self.registros()
         self.assertEqual(harness["cwd"], str(self.worktree.resolve()))
 
-        # MUTANTE: si alguien vuelve a ejecutar todo desde main, el probe de identidad
-        # debe fallar antes de que el harness pueda arrancar.
-        (self.worktree / ".harness-record.json").unlink()
-        texto = self.launcher.read_text(encoding="utf-8")
-        mutado = texto.replace("cwd=str(worktree), env=env", "cwd=str(MAIN), env=env")
-        self.assertNotEqual(texto, mutado)
-        self.launcher.write_text(mutado, encoding="utf-8")
-
-        resultado_mutante = self.ejecutar()
-
-        self.assertNotEqual(resultado_mutante.returncode, 0)
-        self.assertIn("cwd", resultado_mutante.stderr.lower())
-        self.assertFalse((self.worktree / ".harness-record.json").exists())
+        # Unidad 012 retira el tercer tramo (MUTANTE) de este test: verificaba que un
+        # `cwd` de arranque incorrecto fallara en claro, pero esa verificación vivía en
+        # el probe DENTRO del sandbox de SO (`verificar_sandbox`), que corría el probe
+        # como proceso aparte y comparaba su `os.getcwd()` observado contra el
+        # `worktree` esperado — una comprobación independiente del propio valor de la
+        # variable `cwd` que se le pasaba a `subprocess.run`. Sin sandbox, esa segunda
+        # verificación independiente ya no existe: `resolver_worktree()` sigue siendo
+        # la única fuente de verdad, auditada por lectura de código, no por un runtime
+        # check redundante. Documentado como hallazgo en docs/05-trabajo/
+        # 012-quitar-sandbox-so-lanzador/hallazgos.md — es una pérdida de
+        # defensa-en-profundidad real, distinta del riesgo de escritura ya aceptado en
+        # el contrato, y candidata a una unidad de seguimiento si se quiere recuperar
+        # sin volver al sandbox de SO.
 
 
 class LanzadorHarnessClaudeDeFabricaTest(ControlPlaneE2ETest):
@@ -579,9 +411,14 @@ class LanzadorHarnessClaudeDeFabricaTest(ControlPlaneE2ETest):
 
     Cada test reproduce uno de los defectos de la ficha docs/bugs/001-… del
     workspace que reportó la caja negra de campo (12-08-2026). E2E sobre el
-    fixture donde el defecto es observable en argv/entorno/política; a nivel de
-    módulo (el fichero ORIGINAL, patrón de test_ejecucion_gate_real) donde el
-    defecto vive en el perfil seatbelt o en el probe.
+    fixture donde el defecto es observable en argv/entorno; a nivel de módulo
+    (el fichero ORIGINAL) donde el defecto vive en la preparación del entorno.
+
+    Unidad 012 (15-08-2026) retiró los defectos 1, 5 (mitad estado del CLI) y 10, que
+    vivían en el perfil seatbelt y el probe de sandbox — ya no existen, así que sus
+    tests (`test_seatbelt_*`, `test_probe_ejercita_el_guardado_atomico`) se retiran
+    con ellos. El defecto 4 se invierte: ya NO se aísla el HOME de claude a propósito
+    (`test_claude_hereda_home_real` sustituye a `test_claude_usa_home_aislado`).
     """
 
     def modulo_original(self):
@@ -600,73 +437,48 @@ class LanzadorHarnessClaudeDeFabricaTest(ControlPlaneE2ETest):
             sys.path[:] = anterior
         return modulo
 
-    def perfil_seatbelt(self, modulo, harness="claude"):
-        base = Path(self.temporal.name) / "perfil-seatbelt"
-        worktree = base / "worktrees/009-demo"
-        gitdir = base / "main/.git/worktrees/009-demo"
-        common = base / "main/.git"
-        tmp_privado = base / "tmp"
-        documento = base / "docs/bugs/009-demo.md"
-        for ruta in (worktree, gitdir, common, tmp_privado, documento.parent):
-            ruta.mkdir(parents=True, exist_ok=True)
-        documento.write_text("# doc\n", encoding="utf-8")
-        politica, _ = modulo.perfil_sandbox(
-            "seatbelt", "/usr/bin/sandbox-exec", worktree, gitdir, common,
-            tmp_privado, "constructor", harness, documentos=(documento,),
-        )
-        texto = (tmp_privado / "seatbelt.sb").read_text(encoding="utf-8")
-        return politica, texto, documento, common
-
     # --- Defecto 2: el CLI rechaza --mcp-config {} (exige la clave mcpServers)
 
-    @SOLO_POSIX
     def test_mcp_config_declara_mcpservers(self):
         resultado = self.ejecutar()
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
-        harness, _ = self.registros()
+        harness = self.registros()
         argv = harness["argv"]
         mcp = json.loads(argv[argv.index("--mcp-config") + 1])
         self.assertIn("mcpServers", mcp, "el CLI de claude rechaza un mcp-config sin la clave mcpServers")
 
     # --- Defecto 6: dontAsk deniega Write/Edit en headless; debe ser bypassPermissions
 
-    @SOLO_POSIX
     def test_permission_mode_no_es_dontask(self):
         resultado = self.ejecutar()
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
-        harness, _ = self.registros()
+        harness = self.registros()
         argv = harness["argv"]
         modo = argv[argv.index("--permission-mode") + 1]
         self.assertEqual(
             modo, "bypassPermissions",
-            "dontAsk deniega por defecto en headless; la seguridad real la impone el sandbox de SO",
+            "dontAsk deniega Write/Edit/Bash por defecto en headless",
         )
 
-    # --- Defecto 4: claude debe arrancar con HOME aislado y escribible (como codex)
+    # --- Defecto 4 (unidad 012, invertido): claude hereda el HOME real, no uno aislado
 
-    @SOLO_POSIX
-    def test_claude_usa_home_aislado(self):
+    def test_claude_hereda_home_real(self):
         resultado = self.ejecutar()
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
-        harness, _ = self.registros()
-        self.assertNotEqual(
-            harness["home"], str(self.home),
-            "el HOME real del usuario no es escribible dentro del sandbox: claude necesita un HOME aislado",
-        )
-        # Comparar solo desigualdad era vacuo (resolve() ya las hacía distintas):
-        # lo que aprieta es que el HOME viva DENTRO del tmp privado, como en codex.
-        self.assertTrue(
-            harness["home"].startswith(harness["tmp"]),
-            f"el HOME aislado debe vivir dentro del tmp privado: {harness['home']} vs {harness['tmp']}",
+        harness = self.registros()
+        self.assertEqual(
+            harness["home"], str(self.home.resolve()),
+            "unidad 012: claude ya no recibe un HOME aislado — hereda la sesión real "
+            "del usuario (llavero incluido), que es lo que resuelve la autenticación "
+            "sin token manual",
         )
 
     # --- Defecto 5 (mitad lecturas): el constructor debe poder leer docs/ del meta-repo
 
-    @SOLO_POSIX
     def test_add_dir_incluye_docs_del_workspace(self):
         resultado = self.ejecutar()
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
-        harness, _ = self.registros()
+        harness = self.registros()
         argv = harness["argv"]
         directorios = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--add-dir"]
         self.assertIn(
@@ -674,22 +486,8 @@ class LanzadorHarnessClaudeDeFabricaTest(ControlPlaneE2ETest):
             "el contrato manda leer bias/flujos/síntesis: docs/ del meta-repo debe ir en --add-dir",
         )
 
-    # --- Defecto 7: sin el almacén común escribible no hay commit/push
-
-    @SOLO_POSIX
-    def test_politica_permite_el_almacen_git_comun(self):
-        resultado = self.ejecutar()
-        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
-        _, sandbox = self.registros()
-        permitidas = sandbox["policy"]["filesystem"]["allowWrite"]
-        self.assertIn(
-            str((self.main / ".git").resolve()), permitidas,
-            "objetos y refs viven en main/.git (common): sin él, git commit/push fallan con EPERM",
-        )
-
     # --- Defecto 11: el revisor exige modelo DISTINTO (regla 10); falta --modelo
 
-    @SOLO_POSIX
     def test_lanzar_acepta_modelo_explicito(self):
         argv = self.argumentos()
         argv[argv.index("--rol"):argv.index("--rol")] = ["--modelo", "claude-opus-5"]
@@ -697,7 +495,7 @@ class LanzadorHarnessClaudeDeFabricaTest(ControlPlaneE2ETest):
             argv, cwd=self.main, env=self.env, text=True, capture_output=True
         )
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
-        harness, _ = self.registros()
+        harness = self.registros()
         registrado = harness["argv"]
         self.assertIn("--model", registrado)
         self.assertEqual(registrado[registrado.index("--model") + 1], "claude-opus-5")
@@ -709,17 +507,25 @@ class LanzadorHarnessClaudeDeFabricaTest(ControlPlaneE2ETest):
         for variable in ("CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
             self.assertIn(
                 variable, modulo.HEREDAR_ENV,
-                f"sin {variable} el subagente no puede autenticarse dentro del sandbox",
+                f"{variable} sigue disponible para CI/hosts sin sesión interactiva "
+                "(unidad 012: ya no es la única vía, pero sigue siendo válida)",
             )
 
-    # --- Defecto 9: un HOME recién creado no tiene credential helper de git
+    def test_heredar_env_incluye_user_y_logname_para_el_llavero(self):
+        # R1: heredar HOME NO basta para que el llavero de macOS sirva la credencial
+        # de Claude — verificado en sesión con `claude auth status` real: sin USER/
+        # LOGNAME el resultado es loggedIn=false pese a HOME correcto.
+        modulo = self.modulo_original()
+        for variable in ("USER", "LOGNAME"):
+            self.assertIn(variable, modulo.HEREDAR_ENV)
 
-    @SOLO_POSIX
-    def test_preparar_claude_home_existe_y_configura_git(self):
+    # --- Defecto 9 (unidad 012: adaptado a HOME real, ya no aislado)
+
+    def test_preparar_claude_home_configura_gh_con_token(self):
         modulo = self.modulo_original()
         self.assertTrue(
             hasattr(modulo, "preparar_claude_home"),
-            "falta preparar_claude_home(), simétrica a preparar_codex_home()",
+            "falta preparar_claude_home()",
         )
         gh_registro = Path(self.temporal.name) / "gh-setup-git.json"
         self.hacer_ejecutable(
@@ -729,94 +535,34 @@ class LanzadorHarnessClaudeDeFabricaTest(ControlPlaneE2ETest):
             f"pathlib.Path({str(gh_registro)!r}).write_text(json.dumps(\n"
             "    {'argv': sys.argv[1:], 'home': os.environ.get('HOME')}))\n",
         )
-        tmp_privado = Path(self.temporal.name) / "tmp-claude-home"
-        tmp_privado.mkdir()
-        (self.home / ".gitconfig").write_text(
-            "[user]\n\tname = Tester De Campo\n\temail = tester@example.com\n",
-            encoding="utf-8",
-        )
-        env = {"PATH": str(self.bin) + os.pathsep + os.environ.get("PATH", ""),
-               "GH_TOKEN": "gho_token_de_prueba"}
-        modulo.preparar_claude_home(env, tmp_privado, self.home)
-        self.assertNotEqual(env["HOME"], str(self.home))
-        self.assertTrue(Path(env["HOME"]).is_dir())
+        env = {
+            "HOME": str(self.home),
+            "PATH": str(self.bin) + os.pathsep + os.environ.get("PATH", ""),
+            "GH_TOKEN": "gho_token_de_prueba",
+        }
+        modulo.preparar_claude_home(env, self.home)
+        self.assertEqual(env["HOME"], str(self.home), "unidad 012: HOME no se aísla")
         self.assertTrue(gh_registro.is_file(), "con GH_TOKEN presente debe correr gh auth setup-git")
         registro = json.loads(gh_registro.read_text())
         self.assertEqual(registro["argv"][:2], ["auth", "setup-git"])
-        self.assertEqual(registro["home"], env["HOME"])
-        # Sin identidad, git firmaría con un ident autodetectado falso (o moriría en
-        # hosts sin FQDN, WSL2 incluido): la identidad del HOME original debe viajar.
-        ident = subprocess.run(
-            ["git", "config", "--get", "user.name"],
-            env={"HOME": env["HOME"], "PATH": env["PATH"]},
-            capture_output=True, text=True,
-        )
-        self.assertEqual(
-            ident.stdout.strip(), "Tester De Campo",
-            "la identidad de git del usuario debe copiarse al HOME aislado",
-        )
+        self.assertEqual(registro["home"], str(self.home))
 
-    # --- Defecto 1: el perfil seatbelt no declara /dev/null y git muere (exit 128)
-
-    def test_seatbelt_declara_dev_null(self):
+    def test_preparar_claude_home_para_en_claro_sin_identidad_de_git(self):
+        # Caso límite (R1): sin sandbox de SO que dé igual un HOME vacío, un HOME real
+        # sin identidad de git configurada debe fallar en claro, no arrastrar el
+        # problema hasta que el harness intente comitear a medio trabajo.
         modulo = self.modulo_original()
-        _, texto, _, _ = self.perfil_seatbelt(modulo)
-        self.assertIn(
-            '(literal "/dev/null")', texto,
-            "git necesita leer y escribir /dev/null; sin la regla, branch --show-current devuelve vacío",
-        )
+        home_vacio = Path(self.temporal.name) / "home-sin-git"
+        home_vacio.mkdir()
+        env = {"HOME": str(home_vacio), "PATH": os.environ.get("PATH", "")}
+        with self.assertRaises(modulo.ErrorEjecucion) as contexto:
+            modulo.preparar_claude_home(env, home_vacio)
+        self.assertIn("user.name", str(contexto.exception))
 
-    # --- Defecto 5 (mitad estado del CLI): la ruta fija /private/tmp/claude-<uid>
-
-    @unittest.skipUnless(
-        sys.platform == "darwin",
-        "la ruta /private/tmp/claude-<uid> es un contrato del CLI en macOS; en el "
-        "resto de plataformas el bloque ni se ejecuta (seatbelt solo existe en darwin)",
-    )
-    def test_seatbelt_incluye_estado_del_cli_claude(self):
-        modulo = self.modulo_original()
-        politica, _, _, _ = self.perfil_seatbelt(modulo, harness="claude")
-        permitidas = politica["filesystem"]["allowWrite"]
-        estado = [ruta for ruta in permitidas if f"/tmp/claude-{os.getuid()}" in ruta]
-        self.assertTrue(
-            estado,
-            f"el CLI guarda estado de sesión en /private/tmp/claude-{os.getuid()}/…: sin esa ruta, EPERM al arrancar",
-        )
-        self.addCleanup(shutil.rmtree, estado[0], True)
-        # Con (deny default), permitir una hoja que no existe no sirve: el padre
-        # claude-<uid> no es escribible, así que la hoja se pre-crea fuera del sandbox.
-        self.assertTrue(
-            Path(estado[0]).is_dir(),
-            "la ruta de estado debe pre-crearse fuera del sandbox (su padre no es escribible)",
-        )
-
-    # --- Defecto 10: guardado atómico de documentos (temporal hermano + rename)
-
-    def test_seatbelt_permite_guardado_atomico_de_documentos(self):
-        modulo = self.modulo_original()
-        _, texto, documento, _ = self.perfil_seatbelt(modulo)
-        # Mirar solo que exista "(regex" dejó pasar una regla inerte (revisión ronda 1):
-        # aquí se comprueba la SEMÁNTICA — el patrón debe casar con el temporal hermano
-        # y no con un fichero sin relación del mismo directorio.
-        patrones = [p.replace('\\"', '"')
-                    for p in re.findall(r'\(regex #"([^"]+)"\)', texto)]
-        self.assertTrue(patrones, "falta la regla de hermanos por documento en el perfil")
-        hermano = str(documento) + ".tmp1234"
-        ajeno = str(documento.parent / "otro-fichero.md")
-        self.assertTrue(
-            any(re.fullmatch(patron, hermano) for patron in patrones),
-            f"la regla debe CASAR con el temporal hermano del guardado atómico: {patrones}",
-        )
-        self.assertFalse(
-            any(re.fullmatch(patron, ajeno) for patron in patrones),
-            "la regla no debe abrir el directorio a ficheros sin relación",
-        )
-
-    @SOLO_POSIX
     def test_codex_no_recibe_lecturas_como_escribibles(self):
         resultado = self.ejecutar(harness="codex")
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
-        harness, _ = self.registros()
+        harness = self.registros()
         argv = harness["argv"]
         directorios = [argv[i + 1] for i, arg in enumerate(argv) if arg == "--add-dir"]
         # En codex --add-dir significa "directorio ESCRIBIBLE adicional" (su --help):
@@ -826,21 +572,10 @@ class LanzadorHarnessClaudeDeFabricaTest(ControlPlaneE2ETest):
             "docs/ entero no debe declararse escribible en la capa codex",
         )
 
-    def test_probe_ejercita_el_guardado_atomico(self):
-        modulo = self.modulo_original()
-        self.assertNotIn(
-            ".open('a')", modulo.PROBE,
-            "abrir en modo append pasa con el permiso viejo y no detecta el hueco",
-        )
-        self.assertIn(
-            "with_name(", modulo.PROBE,
-            "el probe debe crear y borrar un temporal hermano del documento, el patrón real de guardado",
-        )
-
 
 class RevisorEnCarrilDirectoTest(ControlPlaneE2ETest):
     """Bug 002-revisor-carril-directo: el revisor fresco debe poder lanzarse por el
-    control plane en carril directo/exprés (ADR-022, AGENTS.md regla 1); solo el
+    control plane en carril directo/exprés (AGENTS.md regla 1); solo el
     CONSTRUCTOR debe quedar rechazado en esos carriles."""
 
     def crear_unidad_directo(self, nombre="002-demo"):
@@ -856,7 +591,6 @@ class RevisorEnCarrilDirectoTest(ControlPlaneE2ETest):
         self.git("worktree", "add", str(destino), "-b", nombre, "main", cwd=self.main)
         return destino
 
-    @SOLO_POSIX
     def test_revisor_se_lanza_en_carril_directo(self):
         worktree = self.crear_unidad_directo()
         resultado = self.ejecutar(rol="revisor", unidad="002-demo")
@@ -864,7 +598,6 @@ class RevisorEnCarrilDirectoTest(ControlPlaneE2ETest):
         harness = json.loads((worktree / ".harness-record.json").read_text())
         self.assertEqual(harness["branch"], "002-demo")
 
-    @SOLO_POSIX
     def test_constructor_sigue_rechazado_en_carril_directo(self):
         self.crear_unidad_directo()
         resultado = self.ejecutar(rol="constructor", unidad="002-demo")
