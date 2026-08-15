@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Contratos de trabajo · ingeniería de requisitos</title>
+<style>
+  /* PLANTILLA FIJA del visor de CONTRATOS. Sólo lee: las unidades vivas del
+     workspace (docs/05-trabajo/) y su especificacion.md. No comparte fichero
+     con el visor de flujos, pero sí su paleta y su interruptor de tema: los dos
+     bloques de abajo se copian LITERALES de visor/plantilla.html y un test los
+     compara línea a línea. Si cambias uno, cambia el otro. */
+  /* ---------- paleta (misma que manual-ingenieria-requisitos.html) ----------
+     Claro por defecto, oscuro automático según el sistema, y data-theme para forzarlo.
+     Los papeles semánticos se conservan para daltonismo: persona = cálido (warn),
+     automático·código = azul (accent), automático·IA = verde (ok). */
+  :root {
+    --paper: #F3F5F1; --sheet: #FBFCFA; --panel: #FBFCFA;
+    --ink: #16202A; --muted: #4A5A66; --faint: #7C8C96;
+    --line: #CDD5CE; --line-soft: #E1E7E0;
+    --accent: #1F5673; --accent-bg: #E4EDF2;
+    --ok: #3D6B4C; --ok-bg: #E3EDE4;
+    --warn: #8E6410; --warn-bg: #F2EBDA;
+    --fail: #A03127; --fail-bg: #F4E4E1;
+    --alt: #5B4A78; --alt-bg: #ECE8F3;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper: #0F1418; --sheet: #141B21; --panel: #141B21;
+      --ink: #DEE6E9; --muted: #9DAEB8; --faint: #6E7F8A;
+      --line: #2B363E; --line-soft: #202A31;
+      --accent: #7FB4D4; --accent-bg: #16242E;
+      --ok: #77B189; --ok-bg: #17251C;
+      --warn: #CE9F45; --warn-bg: #251F12;
+      --fail: #E08578; --fail-bg: #2A1815;
+      --alt: #A99AC8; --alt-bg: #1E1A26;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #0F1418; --sheet: #141B21; --panel: #141B21;
+    --ink: #DEE6E9; --muted: #9DAEB8; --faint: #6E7F8A;
+    --line: #2B363E; --line-soft: #202A31;
+    --accent: #7FB4D4; --accent-bg: #16242E;
+    --ok: #77B189; --ok-bg: #17251C;
+    --warn: #CE9F45; --warn-bg: #251F12;
+    --fail: #E08578; --fail-bg: #2A1815;
+    --alt: #A99AC8; --alt-bg: #1E1A26;
+  }
+  :root[data-theme="light"] {
+    --paper: #F3F5F1; --sheet: #FBFCFA; --panel: #FBFCFA;
+    --ink: #16202A; --muted: #4A5A66; --faint: #7C8C96;
+    --line: #CDD5CE; --line-soft: #E1E7E0;
+    --accent: #1F5673; --accent-bg: #E4EDF2;
+    --ok: #3D6B4C; --ok-bg: #E3EDE4;
+    --warn: #8E6410; --warn-bg: #F2EBDA;
+    --fail: #A03127; --fail-bg: #F4E4E1;
+    --alt: #5B4A78; --alt-bg: #ECE8F3;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { background: var(--paper); color: var(--ink); font: 16px/1.5 var(--sans); }
+  .pagina { max-width: 1180px; margin: 0 auto; padding: 32px 20px 90px; }
+
+  header { position: relative; padding-right: 44px; }
+  header .marca { font-size: 11px; font-weight: bold; letter-spacing: .14em; text-transform: uppercase; color: var(--warn); }
+  .boton-tema { position: absolute; top: -2px; right: 0; width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--line); background: var(--sheet); color: var(--muted); font-size: 15px; line-height: 1; cursor: pointer; }
+  .boton-tema:hover { border-color: var(--accent); color: var(--ink); }
+  .boton-tema:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  h1 { font-size: 25px; line-height: 1.2; margin: 6px 0 2px; }
+  .sub { color: var(--muted); font-size: 13.5px; }
+
+  .aviso-flotante { display: none; position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 20; width: calc(100% - 40px); max-width: 680px; border: 2px solid var(--warn); border-radius: 10px; background: var(--warn-bg); padding: 10px 14px; font-size: 13.5px; box-shadow: 0 4px 16px rgba(11, 11, 11, .18); }
+  .aviso-flotante.visible { display: block; }
+
+  .cuerpo { display: flex; gap: 26px; align-items: flex-start; margin-top: 22px; }
+
+  .menu-unidades { flex: 0 0 268px; position: sticky; top: 16px; max-height: calc(100vh - 40px); overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--sheet); padding: 12px; }
+  .titulo-menu { font-size: 11px; font-weight: bold; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); margin-bottom: 8px; }
+  .menu-unidades input[type="search"] { width: 100%; font: 13px var(--sans); color: var(--ink); background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; margin-bottom: 10px; }
+  .menu-unidades button { display: block; width: 100%; text-align: left; font: 13.5px var(--sans); color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 8px 10px; margin: 2px 0; cursor: pointer; }
+  .menu-unidades button:hover { border-color: var(--line); background: var(--panel); }
+  .menu-unidades button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .menu-unidades button.activa { background: var(--accent-bg); border-color: var(--accent); }
+  .menu-unidades button .nombre { display: block; font-weight: bold; }
+  .menu-unidades .vacio { font-size: 13px; color: var(--faint); padding: 6px 2px; }
+
+  .chip { display: inline-block; font-size: 10.5px; font-weight: bold; letter-spacing: .06em; text-transform: uppercase; border-radius: 999px; padding: 2px 8px; margin: 4px 4px 0 0; border: 1px solid var(--line); background: var(--line-soft); color: var(--muted); }
+  .chip-pendiente { background: var(--warn-bg); border-color: var(--warn); color: var(--warn); }
+  .chip-aprobado { background: var(--ok-bg); border-color: var(--ok); color: var(--ok); }
+
+  .panel { flex: 1 1 auto; min-width: 0; }
+  .panel .vacio { border: 1px dashed var(--line); border-radius: 10px; padding: 24px; color: var(--muted); font-size: 14px; background: var(--sheet); }
+  .cabecera-contrato { border: 1px solid var(--line); border-left: 4px solid var(--warn); border-radius: 10px; background: var(--sheet); padding: 14px 18px; }
+  .cabecera-contrato h2 { font-size: 20px; line-height: 1.25; }
+  .cabecera-contrato .ruta { font-size: 12px; color: var(--faint); margin-top: 4px; word-break: break-all; }
+
+  .bluf { margin-top: 18px; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 10px; background: var(--sheet); padding: 14px 18px; }
+  .bluf > h3 { font-size: 17px; margin-bottom: 6px; }
+  .bluf + .bluf { margin-top: 14px; }
+  .plegable { margin-top: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--sheet); padding: 10px 18px; }
+  .plegable > summary { cursor: pointer; font-weight: bold; font-size: 14.5px; color: var(--muted); }
+  .plegable > summary:focus-visible { outline: 2px solid var(--warn); outline-offset: 3px; border-radius: 4px; }
+  .plegable[open] > summary { margin-bottom: 8px; }
+
+  .md { font-size: 15px; max-width: 78ch; }
+  .md h4 { font-size: 15px; margin: 14px 0 4px; }
+  .md h5 { font-size: 13.5px; color: var(--muted); margin: 12px 0 4px; }
+  .md p { margin: 8px 0; }
+  .md ul, .md ol { margin: 8px 0 8px 22px; }
+  .md li { margin: 3px 0; }
+  .md li.tarea { list-style: none; margin-left: -18px; }
+  .md li.tarea .caja { color: var(--muted); margin-right: 6px; }
+  .md li.tarea.hecha { color: var(--muted); }
+  .md code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; background: var(--line-soft); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+  .md pre { margin: 10px 0; padding: 10px 12px; overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+  .md pre code { border: 0; background: none; padding: 0; }
+  .md blockquote { margin: 10px 0; padding: 6px 14px; border-left: 3px solid var(--line); color: var(--muted); font-size: 14px; }
+  .md table { border-collapse: collapse; margin: 10px 0; font-size: 13.5px; width: 100%; }
+  .md th, .md td { border: 1px solid var(--line); padding: 6px 9px; text-align: left; vertical-align: top; }
+  .md th { background: var(--line-soft); }
+  .md a { color: var(--accent); }
+
+  @media (max-width: 860px) {
+    .cuerpo { display: block; }
+    .menu-unidades { position: static; max-height: none; width: 100%; margin-bottom: 20px; }
+  }
+</style>
+</head>
+<body>
+<script>
+  /* Tema: por defecto manda el sistema (prefers-color-scheme). Si el usuario toca el botón,
+     su elección manda y se recuerda. Se aplica ANTES de pintar para no dar un fogonazo.
+     Bloque literal del visor de flujos (misma clave de memoria: el ajuste viaja entre las
+     dos webs); un test lo compara línea a línea. */
+  (function () {
+    var GUARDADO = "visor-tema";
+    var raiz = document.documentElement;
+    var elegido = null;
+    try { elegido = localStorage.getItem(GUARDADO); } catch (e) { elegido = null; }
+    if (elegido === "dark" || elegido === "light") raiz.dataset.theme = elegido;
+
+    function oscuroAhora() {
+      if (raiz.dataset.theme) return raiz.dataset.theme === "dark";
+      return window.matchMedia("(prefers-color-scheme: dark)").matches;
+    }
+    function pintarBoton(boton) {
+      var oscuro = oscuroAhora();
+      boton.textContent = oscuro ? "☀" : "☾";
+      boton.title = oscuro ? "Cambiar a claro" : "Cambiar a oscuro";
+    }
+    document.addEventListener("DOMContentLoaded", function () {
+      var boton = document.getElementById("boton-tema");
+      if (!boton) return;
+      pintarBoton(boton);
+      boton.addEventListener("click", function () {
+        var nuevo = oscuroAhora() ? "light" : "dark";
+        raiz.dataset.theme = nuevo;
+        try { localStorage.setItem(GUARDADO, nuevo); } catch (e) { /* sin memoria, da igual */ }
+        pintarBoton(boton);
+      });
+      window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", function () {
+        if (!raiz.dataset.theme) pintarBoton(boton);
+      });
+    });
+  })();
+</script>
+  <div class="pagina">
+    <header>
+      <button type="button" id="boton-tema" class="boton-tema" aria-label="Cambiar entre claro y oscuro"></button>
+      <div class="marca">ingeniería de requisitos · contratos de trabajo</div>
+      <h1>Contratos de las unidades</h1>
+      <div class="sub" id="sub">Cargando…</div>
+    </header>
+
+    <div class="aviso-flotante" id="banner">⚠ El visor perdió la conexión.
+    Pide a tu IA que vuelva a abrir la sesión y recarga esta página.</div>
+
+    <div class="cuerpo">
+      <aside class="menu-unidades" id="menu" aria-label="Unidades de trabajo">
+        <div class="titulo-menu">Unidades</div>
+        <input id="buscar" type="search" placeholder="Buscar unidad…"
+               aria-label="Buscar unidad">
+        <div id="listado"></div>
+      </aside>
+
+      <main class="panel" id="panel">
+        <div class="vacio">Elige una unidad de la lista para leer su contrato.</div>
+      </main>
+    </div>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* BLUF: la conclusión primero. El orden de esta tabla ES el orden en que se
+     pinta el contrato, y `plegada` decide qué se ve abierto de entrada. El Qué,
+     los Criterios y el Cómo lo pruebas tú van arriba y abiertos; lo técnico y el
+     plan de trabajo, debajo y plegados. Una sección que no esté aquí NO se
+     oculta: se pinta al final, plegada. Un test vigila este orden. */
+  var SECCIONES = [
+    {prefijo: "Qué", plegada: false},
+    {prefijo: "Criterios de aceptación", plegada: false},
+    {prefijo: "Cómo lo pruebas tú", plegada: false},
+    {prefijo: "Diseño conversado", plegada: true},
+    {prefijo: "Deltas al mapa", plegada: true},
+    {prefijo: "Cómo (enfoque técnico)", plegada: true},
+    {prefijo: "Fuera de alcance", plegada: true},
+    {prefijo: "Verificación", plegada: true},
+    {prefijo: "Contexto para el constructor", plegada: true},
+    {prefijo: "Plan de trabajo", plegada: true},
+    {prefijo: "Reglas del constructor", plegada: true},
+    {prefijo: "Definición de hecho", plegada: true}
+  ];
+
+  var unidades = [];
+  var elegida = null;
+  var listado = document.getElementById("listado");
+  var panel = document.getElementById("panel");
+  var buscar = document.getElementById("buscar");
+  var banner = document.getElementById("banner");
+  var sub = document.getElementById("sub");
+
+  function esc(t) {
+    return String(t).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  /* ---------- Markdown mínimo ----------
+     El Markdown de las especificaciones es simple y conocido: encabezados,
+     listas (con casillas), tablas, citas, bloques de código y negritas. Con eso
+     basta; no se trae una librería para esto. */
+
+  function enLinea(t) {
+    var salida = "";
+    var resto = esc(t);
+    // El código va primero: dentro de `...` no se interpreta nada más.
+    var trozos = resto.split(/(`[^`]+`)/);
+    for (var i = 0; i < trozos.length; i++) {
+      var trozo = trozos[i];
+      if (trozo.charAt(0) === "`" && trozo.length > 1) {
+        salida += "<code>" + trozo.slice(1, -1) + "</code>";
+        continue;
+      }
+      trozo = trozo.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,
+        function (_, texto, url) {
+          if (!/^(https?:|#)/.test(url)) return texto;  // sin rutas locales
+          return '<a href="' + url + '" rel="noreferrer">' + texto + "</a>";
+        });
+      trozo = trozo.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      trozo = trozo.replace(/(^|[\s(])_([^_]+)_(?=[\s.,;:)]|$)/g, "$1<em>$2</em>");
+      salida += trozo;
+    }
+    return salida;
+  }
+
+  function fila(linea, celda) {
+    var partes = linea.trim().replace(/^\|/, "").replace(/\|$/, "").split("|");
+    var html = "<tr>";
+    for (var i = 0; i < partes.length; i++) {
+      html += "<" + celda + ">" + enLinea(partes[i].trim()) + "</" + celda + ">";
+    }
+    return html + "</tr>";
+  }
+
+  function bloques(lineas) {
+    var html = "";
+    var i = 0;
+    while (i < lineas.length) {
+      var linea = lineas[i];
+      var limpia = linea.trim();
+
+      if (!limpia) { i++; continue; }
+
+      if (/^```/.test(limpia)) {
+        var codigo = [];
+        i++;
+        while (i < lineas.length && !/^```/.test(lineas[i].trim())) {
+          codigo.push(esc(lineas[i]));
+          i++;
+        }
+        i++;
+        html += "<pre><code>" + codigo.join("\n") + "</code></pre>";
+        continue;
+      }
+
+      var enc = /^(#{3,6})\s+(.*)$/.exec(limpia);
+      if (enc) {
+        var nivel = Math.min(enc[1].length + 1, 6);
+        html += "<h" + nivel + ">" + enLinea(enc[2]) + "</h" + nivel + ">";
+        i++;
+        continue;
+      }
+
+      if (limpia.charAt(0) === "|") {
+        var filas = [];
+        while (i < lineas.length && lineas[i].trim().charAt(0) === "|") {
+          filas.push(lineas[i]);
+          i++;
+        }
+        var separador = filas.length > 1 && /^\|[\s:|-]+\|$/.test(filas[1].trim());
+        html += "<table>";
+        if (separador) {
+          html += "<thead>" + fila(filas[0], "th") + "</thead><tbody>";
+          for (var f = 2; f < filas.length; f++) html += fila(filas[f], "td");
+          html += "</tbody>";
+        } else {
+          html += "<tbody>";
+          for (var g = 0; g < filas.length; g++) html += fila(filas[g], "td");
+          html += "</tbody>";
+        }
+        html += "</table>";
+        continue;
+      }
+
+      if (/^>\s?/.test(limpia)) {
+        var cita = [];
+        while (i < lineas.length && /^>\s?/.test(lineas[i].trim())) {
+          cita.push(lineas[i].trim().replace(/^>\s?/, ""));
+          i++;
+        }
+        html += "<blockquote>" + bloques(cita) + "</blockquote>";
+        continue;
+      }
+
+      if (/^([-*]|\d+\.)\s+/.test(limpia)) {
+        var ordenada = /^\d+\.\s+/.test(limpia);
+        var items = [];
+        while (i < lineas.length) {
+          var actual = lineas[i];
+          var suya = actual.trim();
+          if (/^([-*]|\d+\.)\s+/.test(suya) && !/^\s\s+/.test(actual)) {
+            items.push([suya.replace(/^([-*]|\d+\.)\s+/, "")]);
+          } else if (items.length && suya && /^\s+/.test(actual)) {
+            items[items.length - 1].push(suya);  // continuación sangrada
+          } else {
+            break;
+          }
+          i++;
+        }
+        html += ordenada ? "<ol>" : "<ul>";
+        for (var k = 0; k < items.length; k++) {
+          var texto = items[k].join(" ");
+          var tarea = /^\[( |x|X)\]\s*/.exec(texto);
+          if (tarea) {
+            var hecha = tarea[1].toLowerCase() === "x";
+            html += '<li class="tarea' + (hecha ? " hecha" : "") + '">' +
+                    '<span class="caja">' + (hecha ? "☑" : "☐") + "</span>" +
+                    enLinea(texto.replace(/^\[( |x|X)\]\s*/, "")) + "</li>";
+          } else {
+            html += "<li>" + enLinea(texto) + "</li>";
+          }
+        }
+        html += ordenada ? "</ol>" : "</ul>";
+        continue;
+      }
+
+      var parrafo = [];
+      while (i < lineas.length) {
+        var p = lineas[i].trim();
+        if (!p || /^([-*>|#]|\d+\.\s)/.test(p) || /^```/.test(p)) break;
+        parrafo.push(p);
+        i++;
+      }
+      if (parrafo.length) html += "<p>" + enLinea(parrafo.join(" ")) + "</p>";
+    }
+    return html;
+  }
+
+  /* Trocea el contrato: frontmatter fuera, título del H1 y una sección por
+     cada `## `. Nada se descarta: lo que no reconoce el orden BLUF se pinta
+     igual, al final. */
+  function trocear(texto) {
+    var lineas = texto.replace(/\r\n/g, "\n").split("\n");
+    if (lineas[0] && lineas[0].trim() === "---") {
+      var cierre = 1;
+      while (cierre < lineas.length && lineas[cierre].trim() !== "---") cierre++;
+      lineas = lineas.slice(cierre + 1);
+    }
+    var titulo = "";
+    var secciones = [];
+    var actual = null;
+    var preambulo = [];
+    for (var i = 0; i < lineas.length; i++) {
+      var linea = lineas[i];
+      var h1 = /^#\s+(.*)$/.exec(linea);
+      var h2 = /^##\s+(.*)$/.exec(linea);
+      if (h1 && !titulo) { titulo = h1[1].trim(); continue; }
+      if (h2) {
+        actual = {titulo: h2[1].trim(), lineas: []};
+        secciones.push(actual);
+        continue;
+      }
+      (actual ? actual.lineas : preambulo).push(linea);
+    }
+    return {titulo: titulo, preambulo: preambulo, secciones: secciones};
+  }
+
+  function ordenBluf(secciones) {
+    var pendientes = secciones.slice();
+    var ordenadas = [];
+    for (var i = 0; i < SECCIONES.length; i++) {
+      for (var j = 0; j < pendientes.length; j++) {
+        if (pendientes[j].titulo.indexOf(SECCIONES[i].prefijo) === 0) {
+          pendientes[j].plegada = SECCIONES[i].plegada;
+          ordenadas.push(pendientes.splice(j, 1)[0]);
+          break;
+        }
+      }
+    }
+    for (var k = 0; k < pendientes.length; k++) {
+      pendientes[k].plegada = true;      // desconocida, pero nunca escondida
+      ordenadas.push(pendientes[k]);
+    }
+    return ordenadas;
+  }
+
+  function chipsDe(u) {
+    var html = "";
+    if (u.pendiente_de_aprobar) {
+      html += '<span class="chip chip-pendiente">pendiente de aprobar</span>';
+    } else {
+      html += '<span class="chip chip-aprobado">aprobado ' + esc(u.aprobado) + "</span>";
+    }
+    if (u.estado) html += '<span class="chip">' + esc(u.estado) + "</span>";
+    if (u.carril) html += '<span class="chip">' + esc(u.carril) + "</span>";
+    if (u.tipo) html += '<span class="chip">' + esc(u.tipo) + "</span>";
+    return html;
+  }
+
+  function pintarContrato(u, texto) {
+    var doc = trocear(texto);
+    var html = '<div class="cabecera-contrato"><h2>' +
+               esc(doc.titulo || u.unidad) + "</h2>" + chipsDe(u) +
+               '<div class="ruta">docs/05-trabajo/' + esc(u.carpeta) +
+               "/especificacion.md</div></div>";
+    var secciones = ordenBluf(doc.secciones);
+    for (var i = 0; i < secciones.length; i++) {
+      var s = secciones[i];
+      var cuerpo = '<div class="md">' + bloques(s.lineas) + "</div>";
+      if (s.plegada) {
+        html += '<details class="plegable"><summary>' + esc(s.titulo) +
+                "</summary>" + cuerpo + "</details>";
+      } else {
+        html += '<section class="bluf"><h3>' + esc(s.titulo) + "</h3>" +
+                cuerpo + "</section>";
+      }
+    }
+    panel.innerHTML = html;
+    // En pantalla estrecha la lista va ENCIMA del contrato: sin este salto, el
+    // clic parece no hacer nada. En ancha se ven las dos cosas a la vez y mover
+    // la página sólo escondería la cabecera.
+    if (window.innerWidth <= 860) panel.scrollIntoView({block: "start"});
+  }
+
+  function abrir(u) {
+    elegida = u.carpeta;
+    // En la barra de direcciones: recargar (o compartir el enlace) devuelve al
+    // mismo contrato en vez de a la lista vacía.
+    if (location.hash.slice(1) !== u.carpeta) location.hash = u.carpeta;
+    pintarListado();
+    panel.innerHTML = '<div class="vacio">Cargando el contrato…</div>';
+    fetch("/contrato/" + encodeURIComponent(u.carpeta) + ".md", {cache: "no-store"})
+      .then(function (r) {
+        if (!r.ok) throw new Error("no se pudo leer el contrato");
+        return r.text();
+      })
+      .then(function (texto) { pintarContrato(u, texto); })
+      .catch(function () {
+        panel.innerHTML = '<div class="vacio">No se pudo leer el contrato de ' +
+                          esc(u.unidad) + ". Recarga la página.</div>";
+      });
+  }
+
+  function pintarListado() {
+    var filtro = (buscar.value || "").toLowerCase().trim();
+    var visibles = unidades.filter(function (u) {
+      return !filtro || (u.unidad + " " + u.estado + " " + u.tipo)
+             .toLowerCase().indexOf(filtro) >= 0;
+    });
+    if (!visibles.length) {
+      listado.innerHTML = '<div class="vacio">Ninguna unidad coincide.</div>';
+      return;
+    }
+    listado.innerHTML = visibles.map(function (u) {
+      return '<button type="button" data-carpeta="' + esc(u.carpeta) + '"' +
+             (u.carpeta === elegida ? ' class="activa" aria-current="true"' : "") +
+             '><span class="nombre">' + esc(u.unidad) + "</span>" +
+             chipsDe(u) + "</button>";
+    }).join("");
+  }
+
+  listado.addEventListener("click", function (ev) {
+    var boton = ev.target.closest("button[data-carpeta]");
+    if (!boton) return;
+    var carpeta = boton.getAttribute("data-carpeta");
+    for (var i = 0; i < unidades.length; i++) {
+      if (unidades[i].carpeta === carpeta) { abrir(unidades[i]); return; }
+    }
+  });
+
+  buscar.addEventListener("input", pintarListado);
+
+  function cargarUnidades() {
+    return fetch("/unidades.json", {cache: "no-store"})
+      .then(function (r) { return r.json(); })
+      .then(function (datos) {
+        banner.classList.remove("visible");
+        unidades = datos.unidades || [];
+        var pendientes = unidades.filter(function (u) {
+          return u.pendiente_de_aprobar;
+        }).length;
+        sub.textContent = unidades.length + " unidades · " + pendientes +
+                          " pendientes de aprobar · " + (datos.workspace || "");
+        pintarListado();
+        var pedida = decodeURIComponent(location.hash.slice(1));
+        if (pedida && pedida !== elegida) {
+          for (var i = 0; i < unidades.length; i++) {
+            if (unidades[i].carpeta === pedida) { abrir(unidades[i]); break; }
+          }
+        }
+      })
+      .catch(function () { banner.classList.add("visible"); });
+  }
+
+  cargarUnidades();
+  // Se sondea sola: las unidades cambian mientras el agente trabaja.
+  setInterval(cargarUnidades, 10000);
+})();
+</script>
+</body>
+</html>
