@@ -1,5 +1,7 @@
-"""revisar_plataforma() de visor/doctor.py: en win32 receta WSL2, en Linux sin mecanismo
-receta bubblewrap, en macOS no cambia de comportamiento (solo informa qué mecanismo hay)."""
+"""revisar_plataforma() de visor/doctor.py: desde la unidad 013 (bug), ninguna plataforma
+comprueba ni receta un mecanismo de sandbox de SO — la unidad 012 lo quitó del lanzador
+(ejecucion.py) y la promesa de WSL2/bubblewrap que dependía de él quedó falsa. Windows solo
+avisa de lo que sigue siendo real: bash y el alias python3."""
 
 import importlib.util
 import sys
@@ -16,106 +18,70 @@ _spec.loader.exec_module(doctor)
 
 class RevisarPlataformaTest(unittest.TestCase):
     def setUp(self):
-        self._sandbox_rutas_original = doctor.SANDBOX_RUTAS
         self._platform_original = sys.platform
+        self._which_original = doctor.shutil.which
         self.addCleanup(self._restaurar)
 
     def _restaurar(self):
-        doctor.SANDBOX_RUTAS = self._sandbox_rutas_original
         sys.platform = self._platform_original
+        doctor.shutil.which = self._which_original
 
-    # R1: win32 receta WSL2 -----------------------------------------------------
+    # R1 (bug 013): win32 ya NO receta WSL2/sandbox --------------------------
 
-    def test_win32_receta_wsl2(self):
+    def test_win32_no_menciona_wsl2_ni_sandbox(self):
         sys.platform = "win32"
+        doctor.shutil.which = lambda nombre: "/usr/bin/" + nombre  # bash y python3 presentes
 
         estado, detalle, consecuencia = doctor.revisar_plataforma()
 
-        self.assertEqual(estado, "WARN")
+        self.assertEqual(estado, "OK")
         texto = detalle + " " + consecuencia
-        self.assertIn("WSL2", texto)
-        self.assertIn("VERSION 2", texto)
-        self.assertIn("/mnt/c", texto)
+        self.assertNotIn("WSL2", texto)
+        self.assertNotIn("sandbox", texto)
+        self.assertNotIn("VERSION 2", texto)
 
-    def test_win32_receta_wsl2_aunque_bash_y_python3_esten_presentes(self):
+    def test_win32_sin_bash_sigue_avisando_bash(self):
+        """Lo que seguía siendo real (bash/python3 vienen de Git for Windows, no del
+        sandbox) no se pierde al quitar la promesa falsa de WSL2."""
         sys.platform = "win32"
-        which_original = doctor.shutil.which
-        doctor.shutil.which = lambda nombre: "/usr/bin/" + nombre  # simula presentes
-        self.addCleanup(setattr, doctor.shutil, "which", which_original)
-
-        estado, _, consecuencia = doctor.revisar_plataforma()
-
-        self.assertEqual(estado, "WARN")
-        self.assertIn("WSL2", consecuencia)
-
-    # R2: linux sin bwrap/srt receta bubblewrap; con mecanismo, OK --------------
-
-    def test_linux_sin_mecanismo_receta_bubblewrap(self):
-        sys.platform = "linux"
-        doctor.SANDBOX_RUTAS = {
-            "linux": (("bwrap", "/ruta/inexistente/bwrap"),
-                      ("srt", "/ruta/inexistente/srt")),
-        }
+        doctor.shutil.which = lambda nombre: None if nombre == "bash" else "/usr/bin/" + nombre
 
         estado, detalle, consecuencia = doctor.revisar_plataforma()
 
         self.assertEqual(estado, "WARN")
-        self.assertIn("bubblewrap", consecuencia)
-        self.assertIn("apt install bubblewrap", consecuencia)
+        self.assertIn("bash", consecuencia)
+        self.assertNotIn("WSL2", consecuencia)
 
-    def test_linux_con_bwrap_presente_es_ok(self):
+    def test_win32_sin_python3_sigue_avisando_el_alias(self):
+        sys.platform = "win32"
+        doctor.shutil.which = lambda nombre: None if nombre == "python3" else "/usr/bin/" + nombre
+
+        estado, detalle, consecuencia = doctor.revisar_plataforma()
+
+        self.assertEqual(estado, "WARN")
+        self.assertIn("python3", consecuencia)
+        self.assertNotIn("WSL2", consecuencia)
+
+    # R2 (bug 013): linux/darwin ya NO comprueban ningún mecanismo de sandbox --
+
+    def test_linux_no_comprueba_mecanismo_de_sandbox(self):
         sys.platform = "linux"
-        doctor.SANDBOX_RUTAS = {
-            "linux": (("bwrap", str(DOCTOR_PATH)),  # cualquier fichero real sirve
-                      ("srt", "/ruta/inexistente/srt")),
-        }
 
         estado, detalle, consecuencia = doctor.revisar_plataforma()
 
         self.assertEqual(estado, "OK")
-        self.assertIn("bwrap", detalle)
-        self.assertEqual(consecuencia, "")
+        self.assertNotIn("bubblewrap", detalle + consecuencia)
+        self.assertNotIn("bwrap", detalle + consecuencia)
+        self.assertNotIn("srt", detalle + consecuencia)
 
-    def test_linux_con_srt_presente_es_ok(self):
-        sys.platform = "linux"
-        doctor.SANDBOX_RUTAS = {
-            "linux": (("bwrap", "/ruta/inexistente/bwrap"),
-                      ("srt", str(DOCTOR_PATH))),
-        }
-
-        estado, detalle, consecuencia = doctor.revisar_plataforma()
-
-        self.assertEqual(estado, "OK")
-        self.assertIn("srt", detalle)
-
-    # R2: darwin no cambia --------------------------------------------------
-
-    def test_darwin_con_sandbox_exec_presente_es_ok_e_informa(self):
+    def test_darwin_no_comprueba_mecanismo_de_sandbox(self):
         sys.platform = "darwin"
-        doctor.SANDBOX_RUTAS = {
-            "darwin": (("sandbox-exec", str(DOCTOR_PATH)),
-                       ("srt", "/ruta/inexistente/srt")),
-        }
 
         estado, detalle, consecuencia = doctor.revisar_plataforma()
 
         self.assertEqual(estado, "OK")
-        self.assertIn("sandbox-exec", detalle)
-        self.assertEqual(consecuencia, "")
-
-    def test_darwin_sin_mecanismo_sigue_siendo_ok(self):
-        """En macOS no cambia nada (R2): a diferencia de Linux, la ausencia del
-        mecanismo no convierte el informe en un aviso."""
-        sys.platform = "darwin"
-        doctor.SANDBOX_RUTAS = {
-            "darwin": (("sandbox-exec", "/ruta/inexistente/sandbox-exec"),
-                       ("srt", "/ruta/inexistente/srt")),
-        }
-
-        estado, _, consecuencia = doctor.revisar_plataforma()
-
-        self.assertEqual(estado, "OK")
-        self.assertEqual(consecuencia, "")
+        self.assertNotIn("sandbox-exec", detalle + consecuencia)
+        self.assertNotIn("srt", detalle + consecuencia)
 
 
 class LosTresTextosNombranWSL2Test(unittest.TestCase):
