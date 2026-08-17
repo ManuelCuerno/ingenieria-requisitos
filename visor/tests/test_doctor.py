@@ -84,24 +84,39 @@ class RevisarPlataformaTest(unittest.TestCase):
         self.assertNotIn("srt", detalle + consecuencia)
 
 
-class LosTresTextosNombranWSL2Test(unittest.TestCase):
-    """R3: la misma verdad en manual, RUNBOOK y sandbox.md de la plantilla."""
+class LosTresTextosYaNoNombranWSL2Test(unittest.TestCase):
+    """R3 (bug 014): la misma verdad en manual, RUNBOOK y sandbox.md de la plantilla — sin
+    sandbox de SO desde la unidad 012, ninguno de los tres debe recetar WSL2/bubblewrap."""
 
-    def test_manual_faq_funciona_en_windows_nombra_wsl2(self):
+    def test_manual_faq_funciona_en_windows_no_nombra_wsl2(self):
         texto = (RAIZ / "manual-ingenieria-requisitos.html").read_text(encoding="utf-8")
         inicio = texto.index("¿Funciona en Windows?")
         fragmento = texto[inicio:inicio + 1500]
-        self.assertIn("WSL2", fragmento)
+        self.assertNotIn("WSL2", fragmento)
+        self.assertNotIn("VERSION 2", fragmento)
+        self.assertIn("Windows", fragmento)  # sigue respondiendo la pregunta
 
-    def test_runbook_nombra_wsl2_y_la_verificacion_de_30_segundos(self):
+    def test_runbook_no_nombra_wsl2_ni_version_2(self):
         texto = (RAIZ / "RUNBOOK.md").read_text(encoding="utf-8")
-        self.assertIn("WSL2", texto)
-        self.assertIn("VERSION 2", texto)
+        self.assertNotIn("WSL2", texto)
+        self.assertNotIn("VERSION 2", texto)
+        self.assertNotIn("bubblewrap", texto)
 
-    def test_sandbox_md_de_la_plantilla_nombra_wsl2(self):
+    def test_sandbox_md_no_nombra_wsl2_ni_version_2(self):
         texto = (RAIZ / "plantilla/docs/00-metodo/sandbox.md").read_text(encoding="utf-8")
-        self.assertIn("WSL2", texto)
-        self.assertIn("VERSION 2", texto)
+        self.assertNotIn("WSL2", texto)
+        self.assertNotIn("VERSION 2", texto)
+        self.assertNotIn("win32", texto)
+
+    def test_sandbox_md_describe_el_mecanismo_real_sin_sandbox_de_so(self):
+        """No basta con que no mencione WSL2: tiene que decir la verdad de hoy — que ya
+        no hay sandbox de SO, no quedarse en blanco. Mencionar sandbox-exec/bwrap para
+        explicar que se retiraron sigue siendo honesto; lo que no puede pasar es que el
+        documento SIGA recetando un mecanismo por plataforma como si aplicara hoy."""
+        texto = (RAIZ / "plantilla/docs/00-metodo/sandbox.md").read_text(encoding="utf-8")
+        self.assertNotIn("Mecanismos por plataforma", texto)
+        self.assertIn("no impone", texto.lower())
+        self.assertIn("cwd", texto)
 
 
 if __name__ == "__main__":

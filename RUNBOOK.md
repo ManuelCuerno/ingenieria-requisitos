@@ -386,28 +386,15 @@ y Linux (`python` a secas ya no existe en los sistemas modernos). En Windows
 el intérprete se llama `py` o `python`: usa ese nombre allí en TODOS los
 comandos.
 
-### Windows: el camino soportado es WSL2
+### Windows
 
-La entrevista y los planos (todo lo de esta sección) funcionan en Windows
-nativo tal cual, porque son solo Python. Lo que NO funciona en Windows
-nativo son los carriles normal/completo y el revisor: `scripts/ejecucion.py`
-exige una cerradura de sistema operativo (sandbox) para arrancarlos y
-Windows nativo no tiene ninguna con paridad (ver
-`plantilla/docs/00-metodo/sandbox.md`); el lanzador se niega a ejecutar sin
-mecanismo, sin bypass. `visor/doctor.py` lo detecta y lo avisa en el primer
-arranque.
-
-El camino soportado en Windows es **WSL2**:
-
-1. Instálalo: `wsl --install` (Windows 10 2004+ / Windows 11).
-2. Comprueba la versión: `wsl -l -v` tiene que decir `VERSION 2` (WSL1 no
-   sirve: no hay kernel Linux real).
-3. Trabaja SIEMPRE dentro del disco de WSL (`/home/...`), nunca en
-   `/mnt/c`: en `/mnt/c` el rendimiento cae, los locks de flock fallan y los
-   permisos se corrompen en silencio.
-4. Verificación de 30 segundos dentro de WSL2: `unshare -Ur true` y
-   `bwrap --ro-bind / / true` deben salir bien. Si falta `bwrap`,
-   `sudo apt install bubblewrap`.
+Todo funciona en Windows nativo tal cual: la entrevista, los planos, y
+también los carriles normal/completo y el revisor (`scripts/ejecucion.py`
+no exige ningún sandbox de sistema operativo — ver
+`plantilla/docs/00-metodo/sandbox.md`). Si `bash` o el intérprete `python3`
+no están disponibles, `visor/doctor.py` lo avisa en el primer arranque
+(bash viene con Git for Windows; donde el manual diga `python3`, en Windows
+puede llamarse `python`).
 
 Los planos se enseñan SIEMPRE con el visor local de esta carpeta. La página
 ya está hecha (`visor/plantilla.html`) y no se genera ni se toca jamás:
