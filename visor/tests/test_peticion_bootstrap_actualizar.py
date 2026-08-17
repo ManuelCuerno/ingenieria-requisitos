@@ -366,8 +366,8 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
             {f"workspace-{numero:02d}" for numero in range(total)},
         )
 
-    def workspace_antiguo(self, con_trabajo=True):
-        ws = self.base / ("antiguo-trabajo" if con_trabajo else "antiguo")
+    def workspace_antiguo(self, con_trabajo=True, nombre=None):
+        ws = self.base / (nombre or ("antiguo-trabajo" if con_trabajo else "antiguo"))
         for nombre in (
             "00-metodo",
             "01-constitucion",
@@ -940,6 +940,160 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
                     contenido.index("@AGENTS.md"),
                     contenido.index("@.claude/personalidad.md"),
                 )
+
+    def importar_actualizar(self):
+        if str(RAIZ / "visor") not in sys.path:
+            sys.path.insert(0, str(RAIZ / "visor"))
+        import actualizar
+        return actualizar
+
+    def fijar_desfase(self, actualizar, valor):
+        original = actualizar.desfase_herramienta
+        actualizar.desfase_herramienta = lambda: valor
+        self.addCleanup(setattr, actualizar, "desfase_herramienta", original)
+
+    def test_aviso_se_construye_con_huella_distinta_y_origen_accesible(self):
+        """R1: método del workspace por detrás del de la herramienta, origen accesible
+        → se construye el mensaje de aviso con las cuatro respuestas. Al día → nada."""
+        actualizar = self.importar_actualizar()
+        self.fijar_desfase(actualizar, 0)
+        ws = self.workspace_antiguo(con_trabajo=False, nombre="aviso-agents")
+
+        mensaje = actualizar.comprobar_aviso(ws)
+
+        self.assertTrue(mensaje, "con el método desactualizado debe haber aviso")
+        for opcion in ("sí", "todos", "nunca", "aplicar"):
+            self.assertIn(opcion, mensaje)
+
+        al_dia = self.workspace_antiguo(con_trabajo=False, nombre="aldia-agents")
+        (al_dia / "METODO.json").write_text(
+            json.dumps(
+                {
+                    "formato": 1,
+                    "huella": actualizar.bootstrap.huella_plantilla(),
+                    "version": actualizar.bootstrap.version_metodo(),
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.assertEqual(actualizar.comprobar_aviso(al_dia), "")
+
+    def test_nunca_persiste_fuera_del_arbol_y_silencia_arranques(self):
+        """R4: `avisar --nunca` guarda la preferencia en .claude/actualizaciones.md
+        (fuera de contenido_esperado, o sea fuera de lo que Modo D toca), el chequeo
+        deja de avisar, y la preferencia sobrevive a la propia actualización."""
+        actualizar = self.importar_actualizar()
+        self.fijar_desfase(actualizar, 0)
+        ws = self.workspace_antiguo(con_trabajo=False, nombre="nunca-agents")
+
+        resultado = self.ejecutar(ACTUALIZAR, "avisar", str(ws), "--nunca")
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        preferencia = ws / ".claude/actualizaciones.md"
+        self.assertTrue(preferencia.is_file())
+        self.assertIn("nunca", preferencia.read_text(encoding="utf-8"))
+        self.assertEqual(actualizar.comprobar_aviso(ws), "")
+
+        esperado, _avisos = actualizar.contenido_esperado(ws)
+        self.assertEqual(
+            [ruta for ruta in esperado if ruta.startswith(".claude/")], []
+        )
+
+        aplicada = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+        self.assertEqual(aplicada.returncode, 0, aplicada.stdout + aplicada.stderr)
+        self.assertTrue(preferencia.is_file())
+        self.assertEqual(actualizar.comprobar_aviso(ws), "")
+
+    def test_avisar_sin_origen_accesible_no_avisa_ni_bloquea(self):
+        """R5: el origen del método no responde (sin red, repo privado sin
+        credenciales…) → `avisar` termina en 0, sin aviso y sin tocar nada."""
+        ws = self.workspace_antiguo(con_trabajo=False, nombre="sinred-agents")
+        falsa = self.base / "herramienta-sin-origen"
+        falsa.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=falsa, check=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=falsa, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"], cwd=falsa, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "--allow-empty", "-m", "raiz"],
+            cwd=falsa, check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "remote", "add", "origin", str(self.base / "origen-que-no-existe.git")],
+            cwd=falsa, check=True,
+        )
+        self.entorno["INGENIERIA_REQUISITOS_HERRAMIENTA"] = str(falsa)
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+            capture_output=True, check=True,
+        ).stdout.strip()
+
+        resultado = self.ejecutar(ACTUALIZAR, "avisar", str(ws))
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertEqual(resultado.stdout.strip(), "")
+        self.assertFalse((ws / ".claude/actualizaciones.md").exists())
+        self.assertEqual(
+            subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=ws, text=True,
+                capture_output=True, check=True,
+            ).stdout.strip(),
+            head,
+        )
+
+    def test_todos_aplica_a_todos_los_registrados(self):
+        """R3: la respuesta "todos" delega en `aplicar --todos`, que actualiza cada
+        workspace registrado y reporta el resultado de cada uno."""
+        self.entorno["INGENIERIA_REQUISITOS_SIN_FETCH"] = "1"
+        workspaces = [
+            self.workspace_antiguo(con_trabajo=False, nombre="todos-uno-agents"),
+            self.workspace_antiguo(con_trabajo=False, nombre="todos-dos-agents"),
+        ]
+        for ws in workspaces:
+            registro = subprocess.run(
+                [sys.executable, str(PROYECTOS), "registrar", str(ws)],
+                cwd=RAIZ, env=self.entorno, text=True, capture_output=True,
+            )
+            self.assertEqual(registro.returncode, 0, registro.stdout + registro.stderr)
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", "--todos")
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        for ws in workspaces:
+            self.assertIn(str(ws), resultado.stdout)
+            self.assertTrue((ws / "docs/00-metodo/scripts/peticion.py").is_file())
+        self.assertEqual(resultado.stdout.count("sobrescritos"), len(workspaces))
+
+    def test_aviso_desaparece_tras_aplicar_este_workspace(self):
+        """R2: tras responder "sí" (aplicar solo esa ruta) el resultado se confirma
+        y el chequeo del siguiente arranque ya no avisa."""
+        actualizar = self.importar_actualizar()
+        self.fijar_desfase(actualizar, 0)
+        ws = self.workspace_antiguo(con_trabajo=False, nombre="si-agents")
+        self.assertTrue(actualizar.comprobar_aviso(ws))
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertIn("sobrescritos", resultado.stdout)
+        self.assertEqual(actualizar.comprobar_aviso(ws), "")
+
+    def test_agents_md_reparte_el_canal_proactivo(self):
+        """El arranque del agente hijo (AGENTS.md, repartido por Modo D) trae el
+        chequeo proactivo: preferencia en .claude/actualizaciones.md, comando
+        `avisar` y las cuatro respuestas, sin bloquear si no hay red o acceso."""
+        ws = self.workspace_antiguo(con_trabajo=False, nombre="canal-agents")
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        agents = (ws / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn(".claude/actualizaciones.md", agents)
+        self.assertIn("actualizar.py avisar", agents)
+        self.assertIn("--nunca", agents)
+        self.assertIn("aplicar --todos", agents)
+        self.assertIn("sin aviso", agents)
 
     def test_agents_md_actualizado_conserva_el_aviso_de_personalidad_corrupta(self):
         """R-1604: la instrucción de avisar una vez y seguir con el tono por defecto

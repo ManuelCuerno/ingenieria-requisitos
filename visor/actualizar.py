@@ -103,7 +103,11 @@ def rutas_sucias(workspace):
         rutas.update(ruta for ruta in salida.split("\0") if ruta)
     return sorted(
         ruta for ruta in rutas
-        if not ruta.startswith((".runtime/", "main/", "worktrees/"))
+        # .claude/ guarda preferencias del dueño (personalidad, avisos de actualización)
+        # que viven a propósito FUERA de lo que Modo D gestiona. El .gitignore nuevo ya
+        # lo ignora, pero en un workspace anterior a ese .gitignore una preferencia
+        # recién guardada bloquearía la actualización como "árbol sucio".
+        if not ruta.startswith((".runtime/", "main/", "worktrees/", ".claude/"))
         # Bytecode de Python: aparece en cuanto el usuario ejecuta cualquier script del
         # método y no es trabajo de nadie. Los .gitignore nuevos ya lo ignoran, pero este
         # chequeo corre ANTES de repartir ese .gitignore: sin filtrarlo aquí, un workspace
@@ -1131,6 +1135,92 @@ def avisar_herramienta_vieja():
               "antes de actualizar tus proyectos.\n")
 
 
+# Preferencia del canal proactivo (el aviso al arrancar el agente de un workspace).
+# Vive en .claude/ a propósito: fuera de git y de contenido_esperado(), así ni Modo D
+# ni una actualización la pisan jamás — mismo patrón que .claude/personalidad.md.
+PREFERENCIAS = ".claude/actualizaciones.md"
+CABECERA_PREFERENCIAS = (
+    "# Avisos de actualización del método\n"
+    "\n"
+    "> Lo lee el arranque del agente (AGENTS.md § Al arrancar). La línea\n"
+    "> `preferencia: nunca` silencia el aviso de versión nueva en todos los arranques\n"
+    "> futuros de este workspace; borra esa línea para volver a preguntarlo.\n"
+    "> La línea `herramienta: <ruta>` recuerda dónde vive la herramienta en esta máquina.\n"
+)
+
+
+def preferencia_nunca(workspace):
+    try:
+        texto = (Path(workspace) / PREFERENCIAS).read_text(
+            encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+    return bool(re.search(r"(?mi)^preferencia:\s*nunca\s*$", texto))
+
+
+def guardar_nunca(workspace):
+    ruta = Path(workspace) / PREFERENCIAS
+    ruta.parent.mkdir(parents=True, exist_ok=True)
+    previo = ""
+    if ruta.is_file():
+        previo = ruta.read_text(encoding="utf-8", errors="replace")
+        if re.search(r"(?mi)^preferencia:\s*nunca\s*$", previo):
+            return
+    base = previo.rstrip("\n") + "\n" if previo.strip() else CABECERA_PREFERENCIAS + "\n"
+    ruta.write_text(base + "preferencia: nunca\n", encoding="utf-8")
+
+
+def comprobar_aviso(workspace):
+    """El mensaje del aviso proactivo, o "" si no toca avisar.
+
+    "" también cuando el origen del método no responde: sin red, sin remoto o repo
+    privado sin credenciales con acceso son el mismo caso (R5) — el arranque del
+    agente sigue sin aviso, sin bloquear y sin pedir nada. El acceso se comprueba con
+    las credenciales git que YA tiene la máquina para esta copia de la herramienta
+    (el fetch de desfase_herramienta), nunca con un fetch anónimo.
+    """
+    workspace = Path(workspace).expanduser().resolve()
+    if preferencia_nunca(workspace):
+        return ""
+    atras = desfase_herramienta()
+    if atras is None:
+        return ""
+    huella_ws = proyectos.leer_marca(workspace)
+    if not atras and huella_ws == bootstrap.huella_plantilla():
+        return ""
+    lineas = ["Hay una actualización del método para este workspace: "
+              + linea_version(workspace)]
+    if atras:
+        lineas.append(f"    (esta copia de la herramienta va {atras} commit(s) por "
+                      "detrás de su origin: haz `git pull` en ella antes de aplicar)")
+    lineas += [
+        "Responde una vez por sesión:",
+        f"    sí           → python3 visor/actualizar.py aplicar {workspace}",
+        "    todos        → python3 visor/actualizar.py aplicar --todos",
+        "    no por ahora → seguir tal cual; se volverá a preguntar en otro arranque",
+        f"    nunca más    → python3 visor/actualizar.py avisar {workspace} --nunca",
+    ]
+    return "\n".join(lineas)
+
+
+def cmd_avisar(args):
+    ws = Path(args.ruta).expanduser().resolve()
+    if not es_workspace(ws):
+        # El canal proactivo jamás bloquea un arranque; solo persistir la
+        # preferencia sobre una ruta que no es un workspace es un error de verdad.
+        print(f"No parece un workspace generado: {ws}")
+        return 1 if args.nunca else 0
+    if args.nunca:
+        guardar_nunca(ws)
+        print(f"Guardado en {PREFERENCIAS}: no volveré a avisar de actualizaciones "
+              f"del método en {ws}.")
+        return 0
+    mensaje = comprobar_aviso(ws)
+    if mensaje:
+        print(mensaje)
+    return 0
+
+
 def es_workspace(ruta):
     """AGENTS.md + los planos dentro. Nunca dentro de la propia herramienta: la regla 2 de
     su AGENTS.md prohíbe guardar proyectos aquí, así que tampoco se registran."""
@@ -1240,7 +1330,17 @@ def main():
         grupo = p.add_mutually_exclusive_group(required=True)
         grupo.add_argument("ruta", nargs="?", help="carpeta del workspace <proyecto>-agents")
         grupo.add_argument("--todos", action="store_true", help="todos los registrados")
+    p_avisar = sub.add_parser(
+        "avisar",
+        help="canal proactivo del arranque: ¿hay método más nuevo para este workspace? "
+             "No escribe nada (salvo con --nunca) y nunca bloquea",
+    )
+    p_avisar.add_argument("ruta", help="carpeta del workspace <proyecto>-agents")
+    p_avisar.add_argument("--nunca", action="store_true",
+                          help="guarda la preferencia de no volver a avisar en este workspace")
     args = ap.parse_args()
+    if args.orden == "avisar":
+        return cmd_avisar(args)
     if args.orden == "buscar" or getattr(args, "todos", False):
         # Solo en las entradas "de campaña": una ruta suelta debe funcionar sin red.
         avisar_herramienta_vieja()

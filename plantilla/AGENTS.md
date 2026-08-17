@@ -8,14 +8,22 @@ existe `.claude/personalidad.md`, aplícalo desde tu primera respuesta (CÓMO ha
 
 0. **Solo-consulta arranca ligero.** ¿La petición solo LEE (una duda, enseñar el estado,
    explicar algo del proyecto)? Salta el arranque y responde con el router de abajo, sin
-   declarar rol. En cuanto la sesión vaya a escribir o ejecutar algo, arranque completo (1-4).
+   declarar rol. En cuanto la sesión vaya a escribir o ejecutar algo, arranque completo (1-5).
 1. **Actualiza el taller:** ejecuta `setup.py` con el Python disponible. Esto coloca
    `main/` en la última `origin/main` mediante fast-forward; si no puede, PARA y explica
    por qué. Nunca trabajes desde una referencia remota antigua.
-2. **Linta el método:** `python3 docs/00-metodo/scripts/lint_metodo.py`. Un FAIL tuyo se
+2. **¿Hay método más nuevo? Avisa y sigue.** Salvo que `.claude/actualizaciones.md` diga
+   `preferencia: nunca`, ejecuta `python3 <herramienta>/visor/actualizar.py avisar <este
+   workspace>` con timeout corto (≤15 s); la ruta de la herramienta la anota ese fichero
+   (`herramienta: <ruta>`; anótala tú cuando la conozcas). Si anuncia versión nueva, dilo UNA
+   vez por sesión y ofrece: **sí** (`… aplicar <este workspace>`; confirma qué cambió) ·
+   **todos** (`… aplicar --todos`; lista cada resultado) · **no por ahora** · **nunca más**
+   (`… avisar <este workspace> --nunca`; queda fuera de lo que se actualiza). ¿Sin ruta,
+   fallo, tardanza, red o acceso (repo privado)? Arranca igual, sin aviso ni pedir nada.
+3. **Linta el método:** `python3 docs/00-metodo/scripts/lint_metodo.py`. Un FAIL tuyo se
    arregla antes de seguir; uno causado por el método no te bloquea (regla 13, ADR-026).
-3. **Lee `docs/05-trabajo/ESTADO.md`**: dónde estamos, qué hay en vuelo y qué toca ahora.
-4. **Declara tu rol al usuario y confírmalo ANTES de trabajar.** Ofrécele los tres:
+4. **Lee `docs/05-trabajo/ESTADO.md`**: dónde estamos, qué hay en vuelo y qué toca ahora.
+5. **Declara tu rol al usuario y confírmalo ANTES de trabajar.** Ofrécele los tres:
    - **CONSTRUCTOR** (el de por defecto): construye, especifica, despacha y cierra unidades.
    - **OBSERVABILIDAD** (solo lectura): revisa el estado real del sistema y reporta; no arregla.
    - **DEPLOY**: el único con manos en producción.
@@ -80,14 +88,9 @@ existe `.claude/personalidad.md`, aplícalo desde tu primera respuesta (CÓMO ha
 8. **Desviación de contrato → PARA y escala.** Si al construir tu trabajo va a contradecir la
    especificación o el mapa (eliminar algo, cambiar comportamiento prometido), detente. Las
    desviaciones de implementación (cambia el cómo, no el contrato) se terminan y se reportan.
-9. **Carriles (cuatro).** Exprés: cabe en una frase Y no cambia comportamiento → sin documentos.
-   **Directo, el del día a día**: cambia comportamiento pero encaja en una actividad que YA está
-   en el mapa, sin moverlo, 1-3 ficheros sin hotspots, diff < 250 líneas y se deshace
-   revirtiendo → ficha de una pantalla y 2 puertas (`runbooks/directo.md`). Normal: mueve el
-   mapa, toca hotspots o no cabe en la ficha. Completo: transversal, arriesgado o desconocido,
-   `+ investigacion.md`. **Si cambia comportamiento nunca es exprés**, y ante la duda se SUBE de
-   carril. Producción caída: `hotfix.md`. Ningún carril recorta la evidencia, la revisión firmada
-   ni el OK del usuario sobre la app.
+9. **Carriles (cuatro).** Exprés: cabe en una frase Y no cambia comportamiento → sin documentos. **Directo, el del día a día**: cambia comportamiento pero encaja en una actividad que YA está en el mapa, sin moverlo, 1-3 ficheros sin hotspots, diff < 250 líneas y se deshace
+   revirtiendo → ficha de una pantalla y 2 puertas (`runbooks/directo.md`). Normal: mueve el mapa, toca hotspots o no cabe en la ficha. Completo: transversal, arriesgado o desconocido,
+   `+ investigacion.md`. **Si cambia comportamiento nunca es exprés**, y ante la duda se SUBE de carril. Producción caída: `hotfix.md`. Ningún carril recorta la evidencia, la revisión firmada ni el OK del usuario sobre la app.
 10. **Esfuerzo y modelo por carril (ADR-016).** Exprés y directo: el modelo y el razonamiento
     más baratos que hagan el trabajo. Normal: medio. Completo y hotfix: el alto. Revisor:
     modelo DISTINTO al que construyó. Lint y unidades documentales: el modelo pequeño.
@@ -101,12 +104,8 @@ existe `.claude/personalidad.md`, aplícalo desde tu primera respuesta (CÓMO ha
     no se pegan**: solo el veredicto y las líneas que lo prueban.
 13. **Los guardianes se lintean.** `lint_metodo.py` al arrancar y cerrar; `lint_ci.py` antes
     del merge (`--require-e2e` si los planos seleccionan E2E); `lint_deploy.py` antes de producción. Un FAIL del proyecto se arregla; uno causado por el MÉTODO se registra (`caja_negra.py registrar`) y NO te bloquea: sigue, el arreglo llega por Modo D (ADR-026). Estructura solo con ADR.
-14. **Los flujos siguen vivos — la puerta la abre el DELTA, no el cambio.** Si el trabajo
-    **añade, quita o contradice** algo del mapa, asume el rol ANALISTA DE FLUJOS y sigue
-    `docs/00-metodo/requisitos/RUNBOOK.md`: modifica `docs/02-flujos/planos/`, enseña el visor
-    web y obtén la aprobación ANTES de crear unidades de código (ADR-007). Si cabe dentro de un
-    flujo ya escrito, esa puerta NO se abre: el delta, si lo hay, se escribe en el cierre con el
-    trabajo ya visto funcionando (ADR-014).
+14. **Los flujos siguen vivos — la puerta la abre el DELTA, no el cambio.** Si el trabajo **añade, quita o contradice** algo del mapa, asume el rol ANALISTA DE FLUJOS y sigue `docs/00-metodo/requisitos/RUNBOOK.md`: modifica `docs/02-flujos/planos/`, enseña el visor web y obtén la aprobación ANTES de crear unidades de código (ADR-007). Si cabe dentro de un
+    flujo ya escrito, esa puerta NO se abre: el delta, si lo hay, se escribe en el cierre con el trabajo ya visto funcionando (ADR-014).
 15. **Proceso nativo (ADR-021).** Diseño, plan, debugging, TDD, revisión y cierre son locales;
     skills de proceso no, skills técnicas sí. Todo agente delegado pasa por `ejecucion.py` (ADR-022).
 16. **Nadie espera a ciegas** (§ más abajo): un rato largo callado es un fallo, no una espera.
@@ -141,10 +140,8 @@ existe `.claude/personalidad.md`, aplícalo desde tu primera respuesta (CÓMO ha
 
 ## Autoridad de la información (qué fuente manda en conflicto)
 
-El código y sus tests describen el producto de su rama · `docs/` describe el workspace y el
-método · `git -C main worktree list` es el inventario autoritativo de worktrees · `docs/bugs/`
-es la verdad de los bugs · los papeles de una unidad archivada son historia, no doctrina ·
-**lo escrito gana a lo recordado**.
+El código y sus tests describen el producto de su rama · `docs/` describe el workspace y el método · `git -C main worktree list` es el inventario autoritativo de worktrees · `docs/bugs/`
+es la verdad de los bugs · los papeles de una unidad archivada son historia, no doctrina · **lo escrito gana a lo recordado**.
 
 ## El repo de código
 
