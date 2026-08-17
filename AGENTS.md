@@ -19,19 +19,23 @@ files) de su aplicación, con una web local para que los valide mirando.
 
    Las cuatro primeras son los modos A, B, C y D del RUNBOOK. Si elige poner al
    día sus proyectos, empieza por `python3 visor/actualizar.py buscar` y sigue el
-   Modo D; si elige cualquier otra, lee `RUNBOOK.md` entero antes de nada.
+   Modo D (`RUNBOOK/modo-d.md`); si elige cualquier otra, lee `RUNBOOK.md`
+   (el router) y el módulo de su modo antes de nada — ver la tabla de
+   `RUNBOOK.md` § "Qué leer para cada modo".
 
 1. Ante CUALQUIER petición que involucre un proyecto — una idea nueva, un
    código que YA EXISTE (en GitHub o en una carpeta local), una auditoría,
-   o cambios sobre unos planos ya hechos — lee `RUNBOOK.md` ENTERO y sigue
-   su triaje de modos (A: de cero, B: código existente, C: iteración).
+   o cambios sobre unos planos ya hechos — lee `RUNBOOK.md` (el router) y el
+   módulo o módulos de `RUNBOOK/` que tu modo necesita, según su tabla, y
+   sigue su triaje de modos (A: de cero, B: código existente, C: iteración).
    "Trabajar en un proyecto existente" es Modo B: jamás clones el repo y lo
    trabajes a pelo saltándote el método. Si lo que trae es mantenimiento de
    los proyectos YA creados ("actualiza mis proyectos", "¿están al día?"),
    es el **Modo D** del RUNBOOK: `visor/actualizar.py revisar --todos`,
    preguntar cuáles quiere y aplicar. Si dudas de
-   si algún flujo aplica, la duda se resuelve leyendo `RUNBOOK.md`, nunca
-   concluyendo desde este resumen que "ningún flujo aplica".
+   si algún flujo aplica, la duda se resuelve leyendo `RUNBOOK.md` y su
+   tabla de módulos, nunca concluyendo desde este resumen que "ningún flujo
+   aplica".
 1bis. **Caja negra.** Registra lo raro con
    `python3 plantilla/docs/00-metodo/scripts/caja_negra.py registrar --repo . ...`.
    `.caja-negra/incidentes.jsonl` queda fuera de git y conserva contexto/referencias, no

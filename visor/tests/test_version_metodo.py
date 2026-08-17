@@ -271,6 +271,7 @@ class VersionMetodoTest(unittest.TestCase):
                             ignore=shutil.ignore_patterns("tests", "__pycache__"))
         for nombre in ("RUNBOOK.md", "requirements-dev.txt"):
             shutil.copyfile(RAIZ / nombre, copia / nombre)
+        shutil.copytree(RAIZ / "RUNBOOK", copia / "RUNBOOK")
         expres = copia / "plantilla/docs/00-metodo/runbooks/expres.md"
         expres.write_text(expres.read_text(encoding="utf-8") + "\nMARCADOR_ROJO\n",
                           encoding="utf-8")
@@ -402,10 +403,10 @@ class VersionMetodoTest(unittest.TestCase):
         El runbook decía 'un git push y listo'. Contrato: en la sección del Modo D,
         ninguna mención a git push sin exigir el OK explícito del dueño en el mismo
         párrafo."""
-        runbook = (RAIZ / "RUNBOOK.md").read_text(encoding="utf-8")
+        runbook = (RAIZ / "RUNBOOK" / "modo-d.md").read_text(encoding="utf-8")
         inicio = runbook.index("## Modo D")
-        fin = runbook.index("## ", inicio + 1)
-        seccion = runbook[inicio:fin]
+        fin = runbook.find("## ", inicio + 1)
+        seccion = runbook[inicio:] if fin == -1 else runbook[inicio:fin]
         parrafos_con_push = [
             p for p in seccion.split("\n\n") if "git push" in p or "`push`" in p
         ]

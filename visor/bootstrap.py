@@ -138,6 +138,8 @@ ARCHIVOS_REQUISITOS = (
     "RUNBOOK.md", "servir.py", "validar.py", "validar_web.py", "generar_spec.py",
     "compilar.py", "finalizar.py", "requisitos.py", "revision.py", "plantilla.html",
     "esquema.json", "requirements-dev.txt",
+    "RUNBOOK/arranque.md", "RUNBOOK/fases.md", "RUNBOOK/comun.md",
+    "RUNBOOK/modo-c.md", "RUNBOOK/modo-d.md",
 )
 
 
@@ -229,7 +231,8 @@ def huella_plantilla():
         piezas.append(("docs/00-metodo/" + relativo,
                        PLANTILLA / "docs" / "00-metodo" / relativo))
     for nombre in ARCHIVOS_REQUISITOS:
-        origen = (BASE.parent / nombre if nombre in ("RUNBOOK.md", "requirements-dev.txt")
+        origen = (BASE.parent / nombre
+                  if nombre == "requirements-dev.txt" or nombre.startswith("RUNBOOK")
                   else BASE / nombre)
         piezas.append(("docs/00-metodo/requisitos/" + nombre, origen))
     for nombre in ("AGENTS.md", "setup.py"):
@@ -819,6 +822,9 @@ def main():
     requisitos = docs / "00-metodo" / "requisitos"
     requisitos.mkdir()
     shutil.copyfile(BASE.parent / "RUNBOOK.md", requisitos / "RUNBOOK.md")
+    (requisitos / "RUNBOOK").mkdir()
+    for nombre in ("arranque.md", "fases.md", "comun.md", "modo-c.md", "modo-d.md"):
+        shutil.copyfile(BASE.parent / "RUNBOOK" / nombre, requisitos / "RUNBOOK" / nombre)
     for nombre in (
         "servir.py", "validar.py", "validar_web.py", "generar_spec.py",
         "compilar.py", "finalizar.py", "requisitos.py", "revision.py",

@@ -281,7 +281,8 @@ def contenido_esperado(workspace):
             PLANTILLA / "docs" / "00-metodo" / relativo).read_text(encoding="utf-8")
     for nombre in bootstrap.ARCHIVOS_REQUISITOS:
         origen = (HERRAMIENTA / nombre
-                  if nombre in ("RUNBOOK.md", "requirements-dev.txt") else BASE / nombre)
+                  if nombre == "requirements-dev.txt" or nombre.startswith("RUNBOOK")
+                  else BASE / nombre)
         esperado[f"docs/00-metodo/requisitos/{nombre}"] = origen.read_text(encoding="utf-8")
     for origen in sorted((PLANTILLA / "githooks").rglob("*")):
         if origen.is_file():
