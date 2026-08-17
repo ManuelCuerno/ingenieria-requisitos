@@ -1077,7 +1077,10 @@ if culpables_kill:
 else:
     ok("sin pkill -f ni killall en scripts, workflows ni Makefile del repo de código")
 
-# --- 7b. El CI real nace junto al stack; empezarlo y dejarlo a medias es fallo ---
+# --- 7b. El CI real es guía, no gate (ADR-028 aplica ADR-026 a este control) ---
+# Ausencia de CI no pierde trabajo, no pisa producción, no filtra secretos ni absorbe
+# cambios ajenos: por la regla de ADR-026 nunca debió ser un fail(). Quien SÍ quiera
+# materializar su CI sigue teniendo el mismo detalle de qué falta o está mal formado.
 PIEZAS_CI = (
     "scripts/ci/full-suite", "scripts/ci/lint", "scripts/ci/security",
     ".github/workflows/tests.yml", ".github/workflows/quality-security.yml",
@@ -1085,7 +1088,13 @@ PIEZAS_CI = (
 )
 presentes_ci = [ruta for ruta in PIEZAS_CI if (repo_cod / ruta).is_file()]
 lint_ci = RAIZ / "docs/00-metodo/scripts/lint_ci.py"
-if hay_repo and lint_ci.is_file():
+if not lint_ci.is_file():
+    warn("no se pudo comprobar el contrato de CI: falta "
+         "docs/00-metodo/scripts/lint_ci.py")
+elif not hay_repo:
+    warn(f"no se pudo comprobar el contrato de CI: el repo de código ({repo_cod}) "
+         "no existe o no es un repositorio git")
+else:
     requiere_e2e = planos_declaran_e2e()
     opciones_ci = [sys.executable, str(lint_ci), "--repo", str(repo_cod)]
     if requiere_e2e:
@@ -1095,7 +1104,7 @@ if hay_repo and lint_ci.is_file():
         capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
     )
     if (presentes_ci or requiere_e2e) and resultado_ci.returncode:
-        fail("la materialización del CI está incompleta; ejecuta "
+        warn("la materialización del CI está incompleta; ejecuta "
              "`python3 docs/00-metodo/scripts/lint_ci.py --repo main"
              f"{' --require-e2e' if requiere_e2e else ''}` para ver el detalle")
     elif presentes_ci:
