@@ -886,7 +886,7 @@ def main():
     # Puentes de los harnesses que no leen AGENTS.md por su cuenta. Mismo contenido: una
     # línea que importa el router. Cualquier agente nuevo se añade aquí, no en AGENTS.md.
     for puente in ("CLAUDE.md", "GEMINI.md"):
-        (destino / puente).write_text("@AGENTS.md\n", encoding="utf-8")
+        (destino / puente).write_text("@AGENTS.md\n@.claude/personalidad.md\n", encoding="utf-8")
     (destino / "README.md").write_text(
         generar_readme(titulo, frase, remoto_meta, destino.name), encoding="utf-8")
     # setup.py: deja el workspace listo en cualquier ordenador (lee repos.yaml, clona o

@@ -894,6 +894,68 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
             "",
         )
 
+    def test_actualizar_no_toca_personalidad_agente(self):
+        """R-1601/R-1603: la preferencia de tono vive fuera del árbol que Modo D
+        gestiona — .claude/ no aparece en contenido_esperado(), así que Modo D
+        nunca la pisa ni la borra al actualizar."""
+        ws = self.workspace_antiguo()
+        personalidad = ws / ".claude/personalidad.md"
+        personalidad.parent.mkdir(parents=True)
+        contenido_original = "Háblame cercano y breve.\n"
+        personalidad.write_text(contenido_original, encoding="utf-8")
+        subprocess.run(["git", "add", str(personalidad)], cwd=ws, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "preferencia de tono"], cwd=ws,
+            check=True, capture_output=True,
+        )
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertEqual(personalidad.read_text(encoding="utf-8"), contenido_original)
+
+    def test_claude_y_gemini_importan_personalidad_exista_o_no_el_fichero(self):
+        """R-1602: CLAUDE.md y GEMINI.md siempre importan la preferencia de tono
+        además del router, tanto si el workspace ya tiene .claude/personalidad.md
+        como si todavía no la ha fijado nadie."""
+        sin_personalidad = self.workspace_antiguo(con_trabajo=False)
+        con_personalidad = self.workspace_antiguo(con_trabajo=True)
+        ficha_personalidad = con_personalidad / ".claude/personalidad.md"
+        ficha_personalidad.parent.mkdir(parents=True)
+        ficha_personalidad.write_text("Sé formal y detallado.\n", encoding="utf-8")
+        subprocess.run(["git", "add", str(ficha_personalidad)], cwd=con_personalidad, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "preferencia de tono"], cwd=con_personalidad,
+            check=True, capture_output=True,
+        )
+
+        for ws in (sin_personalidad, con_personalidad):
+            resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+            self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+            for puente in ("CLAUDE.md", "GEMINI.md"):
+                contenido = (ws / puente).read_text(encoding="utf-8")
+                self.assertIn("@AGENTS.md", contenido)
+                self.assertIn("@.claude/personalidad.md", contenido)
+                self.assertLess(
+                    contenido.index("@AGENTS.md"),
+                    contenido.index("@.claude/personalidad.md"),
+                )
+
+    def test_agents_md_actualizado_conserva_el_aviso_de_personalidad_corrupta(self):
+        """R-1604: la instrucción de avisar una vez y seguir con el tono por defecto
+        ante un .claude/personalidad.md corrupto vive en AGENTS.md, así que Modo D
+        la reparte y la conserva en cada actualización — no depende de que el dueño
+        del workspace la haya escrito a mano."""
+        ws = self.workspace_antiguo()
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        agents = (ws / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn(".claude/personalidad.md", agents)
+        self.assertIn("avís", agents)
+        self.assertIn("sin bloque", agents)
+
 
 if __name__ == "__main__":
     unittest.main()

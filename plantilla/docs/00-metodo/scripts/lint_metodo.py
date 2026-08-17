@@ -670,8 +670,10 @@ else:
 
 for puente in ("CLAUDE.md", "GEMINI.md"):
     ruta_puente = RAIZ / puente
-    if not ruta_puente.exists() or ruta_puente.read_text(encoding="utf-8") != "@AGENTS.md\n":
-        fail(f"{puente} debe contener únicamente '@AGENTS.md'")
+    contenido_puente = ruta_puente.read_text(encoding="utf-8") if ruta_puente.exists() else ""
+    lineas_esperadas = ("@AGENTS.md\n", "@AGENTS.md\n@.claude/personalidad.md\n")
+    if contenido_puente not in lineas_esperadas:
+        fail(f"{puente} debe redirigir a AGENTS.md (y opcionalmente a .claude/personalidad.md)")
     else:
         ok(f"{puente} redirige directamente a AGENTS.md")
 

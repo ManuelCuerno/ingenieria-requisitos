@@ -316,8 +316,13 @@ def contenido_esperado(workspace):
     esperado["worktrees/README.md"] = (
         PLANTILLA / "worktrees-README.md").read_text(encoding="utf-8")
     esperado[".github/workflows/lint.yml"] = bootstrap.generar_ci()
+    # La preferencia de tono (`.claude/personalidad.md`, R-1601) vive fuera de este
+    # dict a propósito: así Modo D nunca la toca. El import se genera siempre, exista
+    # o no el fichero — un @import a un fichero ausente no rompe el arranque del
+    # agente (comprobado en la práctica), y así el puente ya queda listo desde el
+    # primer `aplicar` para el día en que el dueño del workspace fije su tono (R-1602).
     for puente in ("CLAUDE.md", "GEMINI.md"):
-        esperado[puente] = "@AGENTS.md\n"
+        esperado[puente] = "@AGENTS.md\n@.claude/personalidad.md\n"
 
     # AGENTS.md lleva dentro el título del proyecto: se compara contra la plantilla rellenada
     # con SU título. Si no se puede leer, se dice y se deja fuera — antes desaparecía del

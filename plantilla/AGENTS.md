@@ -1,7 +1,8 @@
 # AGENTS.md — {{TITULO}} (meta-repo)
 
 Este es el **meta-repo de orquestación**: aquí vive el pensamiento del proyecto (`docs/`) y el
-método. El código vive en otro repo, `main/` (solo lectura), y se trabaja en `worktrees/`.
+método. El código vive en otro repo, `main/` (solo lectura), y se trabaja en `worktrees/`. Si
+existe `.claude/personalidad.md`, aplícalo desde tu primera respuesta (CÓMO hablas, no QUÉ haces); si es ilegible, avísalo y sigue con tu tono normal, sin bloquear.
 
 ## Al arrancar (haz esto antes que nada)
 
