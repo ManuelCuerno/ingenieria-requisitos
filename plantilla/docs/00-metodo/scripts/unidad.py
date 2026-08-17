@@ -73,7 +73,6 @@ RE_UNIDAD = re.compile(r"^(\d{3})-([a-z0-9][a-z0-9-]*)$")
 
 # Caracteres mínimos de prosa PROPIA que debe tener el contrato para poder despacharse.
 MINIMO_PROSA = 200
-TOPE_EN_VUELO = 3  # regla 5: default 1, tope absoluto 3 y solo con --paralelo explícito
 
 # El contrato lo aprueba el USUARIO, no el agente: `aprobado:` solo vale si es una fecha ISO.
 # Todo lo demás (`no`, vacío, ausente, "sí", "ok") es ausencia de aprobación.
@@ -1120,10 +1119,9 @@ def _cmd_despachar(args, autoridad, snapshot=None):
             f"  la máquina. Cierra la que está en obra, o repite con --paralelo si esta unidad\n"
             f"  NO comparte ningún fichero con ella (declarado en el frontmatter 'ficheros').")
         return 1
-    if len(activas) >= TOPE_EN_VUELO:
-        fail(f"{len(activas)} unidades en vuelo: {', '.join(activas)} — tope absoluto "
-             f"{TOPE_EN_VUELO}, ni con --paralelo")
-        return 1
+    # Sin tope numérico (ADR-027): con --paralelo caben tantas unidades como quepan sin
+    # chocar — el límite lo pone el propio grafo de ficheros del trabajo pedido, no una
+    # constante. El único gate real es la disjunción de ficheros que sigue abajo.
     # La regla "en paralelo jamás se comparten ficheros" la comprobaba un WARN dirigido a un
     # humano, o sea a nadie: se despachaban dos unidades sobre el mismo fichero sin que nada
     # avisara. Aquí se verifica y se bloquea. Una unidad --documental no toca el repo de
@@ -1961,7 +1959,7 @@ def cmd_estado(_args):
     print("\nCoherencia:")
     activas = sorted(n for n, u in unidades.items() if u["fm"].get("estado") in EN_VUELO)
     if not activas:
-        ok("nada en vuelo (regla 5: 1 por defecto, tope 3)")
+        ok("nada en vuelo (regla 5: 1 por defecto)")
     elif len(activas) == 1:
         ok(f"1 unidad en vuelo: {activas[0]}")
     else:
@@ -2039,7 +2037,7 @@ def main():
                             help="crea rama y worktree de una unidad ya especificada y aprobada")
     p_desp.add_argument("unidad", help="nombre completo NNN-slug")
     p_desp.add_argument("--paralelo", action="store_true",
-                        help="permite despachar con otra unidad en vuelo (tope 3) — solo si NO "
+                        help="permite despachar con otras unidades en vuelo — solo si NO "
                              "comparten ningún fichero")
     p_desp.add_argument(
         "--documental",

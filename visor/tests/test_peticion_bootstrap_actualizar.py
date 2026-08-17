@@ -170,6 +170,10 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         self.assertTrue(
             (destino / "docs/00-metodo/decisiones/022-control-plane-de-ejecucion.md").is_file()
         )
+        # ADR-027, R1: la tupla DECISIONES se olvidó de propagar el 027 la primera vez.
+        adr_027 = destino / "docs/00-metodo/decisiones/027-sin-tope-numerico-de-paralelismo.md"
+        self.assertTrue(adr_027.is_file())
+        self.assertIn("tope", adr_027.read_text(encoding="utf-8").lower())
         self.assertTrue((destino / "docs/05-trabajo/peticiones").is_dir())
         self.assertFalse(
             (destino / "docs/05-trabajo/peticiones/LEGACY.json").exists()

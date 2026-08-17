@@ -120,6 +120,7 @@ DECISIONES = (
     "024-control-plane-de-seguridad-y-evidencia-causal.md",
     "025-el-trabajo-aparcado-no-bloquea-el-modo-d.md",
     "026-guiar-no-bloquear.md",
+    "027-sin-tope-numerico-de-paralelismo.md",
     "028-ci-es-guia-no-gate.md",
 )
 METODO_RAIZ = (

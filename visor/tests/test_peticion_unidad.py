@@ -627,6 +627,84 @@ class PeticionUnidadTest(unittest.TestCase):
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
         self.assertNotIn("en vuelo", resultado.stderr)
 
+    def preparar_unidad_en_vuelo(self, numero, ficheros):
+        """Unidad ya `en_obra` con `ficheros:` declarados, sin pasar por despacho real:
+        censo() solo mira el frontmatter, así que basta con escribirlo directamente para
+        simular varias unidades en vuelo a la vez (ADR-027, R2/R3)."""
+        nombre = f"{numero:03d}-en-vuelo-{numero}"
+        carpeta = self.ws / "docs/05-trabajo" / nombre
+        carpeta.mkdir(parents=True)
+        (carpeta / "especificacion.md").write_text(
+            "---\n"
+            f"unidad: {nombre}\n"
+            "tipo: feature\n"
+            "carril: normal\n"
+            "estado: en_obra\n"
+            "aprobado: 2026-08-04\n"
+            "actividad: REC-1\n"
+            f"ficheros: [{', '.join(ficheros)}]\n"
+            "peticiones: []\n"
+            "actualizado: 2026-08-04\n"
+            "---\n\n# Contrato\n",
+            encoding="utf-8",
+        )
+        return nombre
+
+    def test_cuarta_unidad_disjunta_con_paralelo_despacha_sin_tope_numerico(self):
+        """ADR-027, R2: con 3 unidades ya en vuelo y ficheros disjuntos, una cuarta
+        también disjunta con --paralelo despacha igual — se retira TOPE_EN_VUELO, el
+        único gate real es la disjunción de ficheros."""
+        for numero, fichero in enumerate(("app/uno.py", "app/dos.py", "app/tres.py"), start=1):
+            self.preparar_unidad_en_vuelo(numero, [fichero])
+
+        pid = self.capturar("Cuarta unidad")
+        self.evaluar(pid)
+        creada = self.ejecutar(
+            self.unidad, "nueva", "feature", "cuarta-disjunta", "--desde", pid
+        )
+        self.assertEqual(creada.returncode, 0, creada.stdout + creada.stderr)
+        nombre = next(
+            p.name for p in (self.ws / "docs/05-trabajo").iterdir()
+            if p.name.endswith("-cuarta-disjunta")
+        )
+        ruta = self.aprobar_para_despacho(nombre)
+        texto = ruta.read_text(encoding="utf-8").replace(
+            "ficheros: []", "ficheros: [app/cuatro.py]"
+        )
+        ruta.write_text(texto, encoding="utf-8")
+
+        resultado = self.ejecutar(self.unidad, "despachar", nombre, "--paralelo")
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertNotIn("tope absoluto", (resultado.stdout + resultado.stderr).lower())
+
+    def test_fichero_compartido_sigue_bloqueando_con_paralelo(self):
+        """ADR-027, R3 (caso límite): retirar el tope numérico NO relaja la disjunción
+        de ficheros — dos unidades que declaran el mismo fichero siguen bloqueadas."""
+        self.preparar_unidad_en_vuelo(1, ["app/terminal.py"])
+
+        pid = self.capturar("Choca fichero")
+        self.evaluar(pid)
+        creada = self.ejecutar(
+            self.unidad, "nueva", "feature", "choca-fichero", "--desde", pid
+        )
+        self.assertEqual(creada.returncode, 0, creada.stdout + creada.stderr)
+        nombre = next(
+            p.name for p in (self.ws / "docs/05-trabajo").iterdir()
+            if p.name.endswith("-choca-fichero")
+        )
+        ruta = self.aprobar_para_despacho(nombre)
+        texto = ruta.read_text(encoding="utf-8").replace(
+            "ficheros: []", "ficheros: [app/terminal.py]"
+        )
+        ruta.write_text(texto, encoding="utf-8")
+
+        resultado = self.ejecutar(self.unidad, "despachar", nombre, "--paralelo")
+
+        self.assertEqual(resultado.returncode, 1, resultado.stdout + resultado.stderr)
+        self.assertIn("comparten ficheros declarados", resultado.stderr)
+        self.assertIn("app/terminal.py", resultado.stderr)
+
     def test_bug_evaluado_directo_se_crea_por_carril_directo(self):
         """Incidente de campo (P1, 06-08): la evaluación aceptó ruta
         'directo' para un bug y la creación exigía ruta 'bug' — imposible complacer
@@ -1781,6 +1859,14 @@ class ContratoTextualPeticionesTest(unittest.TestCase):
         posicion_unidad = peticiones.index("unidad.py nueva", posicion_sintesis)
         self.assertLess(posicion_acotada, posicion_sintesis)
         self.assertLess(posicion_sintesis, posicion_unidad)
+
+    def test_agents_no_anuncia_tope_numerico_de_paralelismo(self):
+        # ADR-027, R4: la regla 5 de AGENTS.md debe describir "sin tope numérico" y ya
+        # no puede mencionar el antiguo tope de 3 unidades en vuelo.
+        agents = self.texto("AGENTS.md")
+
+        self.assertIn("sin tope numérico", agents)
+        self.assertNotIn("tope 3", agents)
 
     def test_runbooks_no_abren_unidades_sin_desde(self):
         runbooks = RAIZ / "plantilla/docs/00-metodo/runbooks"

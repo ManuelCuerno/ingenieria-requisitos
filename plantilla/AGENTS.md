@@ -74,8 +74,8 @@ existe `.claude/personalidad.md`, aplícalo desde tu primera respuesta (CÓMO ha
    petición accionable es `peticion.py capturar`; después se evalúa por `runbooks/peticiones.md`.
    Una unidad nace con `unidad.py nueva <tipo> <slug> --desde P-ID [--directo]`: asigna el NNN
    y bloquea trabajo sin origen. `--force` solo sirve para el hotfix y deja deuda escrita.
-5. **Trabajo en vuelo: UNA unidad de código por defecto**, tope 3 y solo si no comparten
-   ficheros (`ficheros:`, que el script cruza). Las `en_validacion` no cuentan. Las unidades
+5. **Trabajo en vuelo: UNA unidad de código por defecto**, sin tope numérico, solo si no
+   comparten ficheros (`ficheros:`, que el script cruza). Las `en_validacion` no cuentan. Las unidades
    `--documental` (leen, no escriben código) tampoco: pueden ir en paralelo.
 6. **Búsquedas de código: dentro de `main/` o de tu worktree.** Desde la raíz no verás código
    (el gitignore lo oculta a las herramientas de búsqueda); eso es intencional.
