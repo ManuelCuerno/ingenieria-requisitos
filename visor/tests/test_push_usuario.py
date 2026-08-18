@@ -211,7 +211,10 @@ class AvisoPostCierreTest(WorkspaceGitTest):
 
         self.assertEqual(self.sha_remoto(), antes)
         self.assertIn("push: usuario", salida)
-        self.assertIn("git -C main push origin main", salida)
+        # El comando imprime la ruta REAL del repo (aquí, absoluta en tmp), no el literal
+        # "main": se afirma el prefijo y el final, no la ruta.
+        self.assertIn("git -C ", salida)
+        self.assertIn("push origin main", salida)
         self.assertNotIn("WARN", salida)
         self.assertNotIn("base vieja", salida)
 
@@ -224,7 +227,8 @@ class AvisoPostCierreTest(WorkspaceGitTest):
 
         self.assertIn("WARN", salida)
         self.assertIn("base vieja", salida)
-        self.assertIn("git -C main push origin main", salida)
+        self.assertIn("git -C ", salida)
+        self.assertIn("push origin main", salida)
 
     def test_sin_commits_pendientes_no_dice_nada(self):
         self.repos_yaml("usuario")
