@@ -967,10 +967,20 @@ def huella_planos_actual():
     try:
         raiz = json.loads(mapa.read_text(encoding="utf-8"))
         rutas = [mapa]
-        rutas.extend(
-            mapa.parent / "actividades" / actividad["id"] / "planos.json"
-            for actividad in raiz.get("actividades", [])
-        )
+        for actividad in raiz.get("actividades", []):
+            ruta = mapa.parent / "actividades" / actividad["id"] / "planos.json"
+            if not ruta.exists():
+                # Bug 026: una actividad declarada con la entrevista a medias no
+                # tiene fichero todavía; reventar aquí bloqueaba el gobierno de
+                # peticiones del workspace entero. Fuera de la huella, con aviso:
+                # cuando el fichero exista, la huella cambiará — como debe ser.
+                print(
+                    f"AVISO: actividad {actividad['id']} sin planos todavía: "
+                    "fuera de la huella hasta que exista",
+                    file=sys.stderr,
+                )
+                continue
+            rutas.append(ruta)
         bundle = {
             ruta.relative_to(mapa.parent).as_posix(): json.loads(
                 ruta.read_text(encoding="utf-8")

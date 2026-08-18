@@ -1006,6 +1006,56 @@ else:
 
         self.assertEqual(vigente.returncode, 0, vigente.stderr)
 
+    def test_una_actividad_a_medias_de_entrevista_no_revienta_la_huella(self):
+        # Bug 026 (visto en mindi-agents): planos.json declara una actividad cuyo
+        # actividades/<id>/planos.json aún no existe (entrevista a medias) y
+        # huella_planos_actual() moría con FileNotFoundError, bloqueando el
+        # gobierno de peticiones del workspace entero. La actividad sin fichero
+        # queda FUERA de la huella, con aviso; la huella sigue siendo determinista.
+        pid = self.capturar("Aprobar flujos con una actividad a medias")
+        resultado = self.ejecutar(
+            "evaluar", pid, "--ruta", "flujos", "--investigacion", "ninguna",
+            "--motivo", "validar los planos", "--flujo", "REC-1",
+            "--huella-flujo", "planos-v1", "--sha", self.sha,
+            "--ruta-codigo", "app/terminal.py", "--conocimiento",
+            "docs/decisiones/004-paleta.md",
+        )
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        planos = self.ws / "docs/02-flujos/planos"
+        lista = planos / "actividades/lista"
+        lista.mkdir(parents=True)
+        mapa = {"version": 1,
+                "actividades": [{"id": "lista"}, {"id": "fantasma"}]}
+        (planos / "planos.json").write_text(json.dumps(mapa), encoding="utf-8")
+        actividad = {"version": 2, "titulo": "Lista"}
+        (lista / "planos.json").write_text(json.dumps(actividad), encoding="utf-8")
+        bundle = {"planos.json": mapa, "actividades/lista/planos.json": actividad}
+        huella = hashlib.sha256(json.dumps(
+            bundle, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        ).encode("utf-8")).hexdigest()
+        recibo = planos / "aprobacion.json"
+        recibo.write_text(
+            json.dumps({
+                "estado": "aprobado", "huella": huella,
+                "fecha": "2026-08-04", "por": "Nate",
+            }),
+            encoding="utf-8",
+        )
+        enlace = self.ejecutar(
+            "enlazar", pid, "--tipo", "flujos", "--ref",
+            "docs/02-flujos/planos/aprobacion.json",
+        )
+        self.assertEqual(enlace.returncode, 0, enlace.stderr)
+
+        vigente = self.ejecutar(
+            "reconciliar", pid, "--revision", "1", "--tipo", "flujos", "--ref",
+            "docs/02-flujos/planos/aprobacion.json", "--evidencia", "recibo vigente",
+        )
+
+        self.assertEqual(vigente.returncode, 0, vigente.stderr)
+        self.assertIn("fantasma", vigente.stderr)
+        self.assertIn("sin planos todavía", vigente.stderr)
+
     def test_unidad_descartada_no_cierra_la_peticion_como_entregada(self):
         pid = self.capturar()
         self.evaluar_ninguna(pid)
