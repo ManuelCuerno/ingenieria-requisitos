@@ -4,6 +4,23 @@ La versión del método viaja con cada proyecto (en su `METODO.json`). Para llev
 estas mejoras a tus proyectos ya creados: abre tu agente aquí y dile «pon al día
 mis proyectos».
 
+## 1.5.0 — 2026-08-18
+
+La campaña de las cajas negras: 45 incidentes de campo de 7 workspaces analizados en un
+día y lo vivo, arreglado. **Codex vuelve a arrancar** (la CLI actual había retirado un flag
+que el lanzador seguía pasando). **Una actividad a medias de entrevista ya no bloquea** el
+gobierno de peticiones del workspace entero. **Ningún gate vuelve a dejarte en un
+callejón**: las unidades anteriores al sistema de peticiones se cierran con tu OK, un
+despliegue de muchas unidades se documenta como lote, un enlace equivocado se cancela con
+su motivo, y evaluar un bug pequeño ya no exige contradecirse (tipo y carril en una sola
+pasada, con compatibilidad hacia atrás). **El control plane ya no se fía de sí mismo**: el
+lease no se roba ante la duda, el constructor no puede tocar su propio contrato (denegación
+real del sistema, no una convención) y el recibo distingue "el proceso terminó" de "hay
+trabajo acreditado". **Los linters dicen la verdad sobre el CI**: un proyecto que nunca
+tuvo el esqueleto recibe un aviso con la deuda nombrada, no un bloqueo eterno; un esqueleto
+roto sigue bloqueando. Y el canario del 1.4.0 aprendió que las rutas tienen dos ortografías
+(symlinks, nombres cortos de Windows) y encuentra tu sesión con cualquiera de las dos.
+
 ## 1.4.0 — 2026-08-18
 
 **Canario de contexto.** Un comando avisa cuando la sesión se está llenando o ya está
