@@ -89,9 +89,9 @@ PLANTILLAS = ("agents-repo-codigo", "bug", "conocimiento", "decision", "desplieg
               "especificacion", "hallazgos", "informe", "investigacion", "plano-operativo",
               "peticion-investigacion-informe", "peticion-investigacion-plan",
               "peticion-investigacion-sintesis", "roadmap", "sintesis")
-SCRIPTS = ("caja_negra.py", "control_plane.py", "doctor.py", "ejecucion.py", "lint_ci.py",
-           "lint_deploy.py", "lint_metodo.py", "lease.py", "peticion.py", "repo_config.py",
-           "unidad.py", "workspace_paths.py")
+SCRIPTS = ("caja_negra.py", "canario.py", "control_plane.py", "doctor.py", "ejecucion.py",
+           "lint_ci.py", "lint_deploy.py", "lint_metodo.py", "lease.py", "peticion.py",
+           "repo_config.py", "unidad.py", "workspace_paths.py")
 DECISIONES = (
     "README.md",
     "001-docs-fuera-del-repo.md",
@@ -183,6 +183,63 @@ def manifiesto_metodo():
     del workspace, el linter no tenía forma de saber qué debía existir.
     """
     return ["docs/00-metodo/" + relativo for relativo in ARCHIVOS_METODO]
+
+
+ORDEN_CANARIO = "python3 docs/00-metodo/scripts/canario.py hook"
+
+
+def sembrar_hook_canario(destino):
+    """Siembra el hook PreCompact(auto) -> canario.py en `.claude/settings.json`.
+
+    Es la única alarma INALUDIBLE del canario: cuando Claude Code va a auto-compactar, el
+    hook avisa aunque nadie haya mirado el porcentaje (la instrucción de AGENTS.md, en
+    cambio, la obedece peor justo el agente sobrecargado). Informa y ya: el auto-compact no
+    se bloquea ni se retrasa.
+
+    Idempotente y respetuosa: `.claude/` guarda preferencias del dueño, así que se conserva
+    todo lo que hubiera y solo se añade el gancho si no está. Devuelve True si escribió.
+    """
+    carpeta = destino / ".claude"
+    carpeta.mkdir(parents=True, exist_ok=True)
+    fichero = carpeta / "settings.json"
+    datos = {}
+    if fichero.is_file():
+        try:
+            datos = json.loads(fichero.read_text(encoding="utf-8"))
+        except ValueError:
+            datos = {}                  # un settings ilegible no se pisa a ciegas: se recompone
+    if not isinstance(datos, dict):
+        datos = {}
+    hooks = datos.setdefault("hooks", {}) if isinstance(datos.get("hooks", {}), dict) else {}
+    datos["hooks"] = hooks
+    precompact = hooks.get("PreCompact")
+    if not isinstance(precompact, list):
+        precompact = []
+    ya_esta = any("canario.py" in str(orden.get("command", ""))
+                  for entrada in precompact if isinstance(entrada, dict)
+                  for orden in entrada.get("hooks", []) if isinstance(orden, dict))
+    if ya_esta:
+        return False
+    precompact.append({"matcher": "auto",
+                       "hooks": [{"type": "command", "command": ORDEN_CANARIO}]})
+    hooks["PreCompact"] = precompact
+    fichero.write_text(json.dumps(datos, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                       encoding="utf-8")
+    return True
+
+
+def sembrar_config_canario(destino):
+    """Deja la tabla de umbrales del canario donde Nate pueda tocarla, con el default 80."""
+    carpeta = destino / ".claude"
+    carpeta.mkdir(parents=True, exist_ok=True)
+    fichero = carpeta / "canario.json"
+    if fichero.is_file():
+        return False
+    fichero.write_text(json.dumps(
+        {"umbral_default": 80, "umbrales": {}, "ventanas": {},
+         "repeticiones": 3, "ventana_eventos": 60},
+        ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return True
 
 
 def morir(msg):
@@ -892,6 +949,10 @@ def main():
     # línea que importa el router. Cualquier agente nuevo se añade aquí, no en AGENTS.md.
     for puente in ("CLAUDE.md", "GEMINI.md"):
         (destino / puente).write_text("@AGENTS.md\n@.claude/personalidad.md\n", encoding="utf-8")
+    # Canario de contexto: el hook PreCompact(auto) y la tabla de umbrales. Van en
+    # `.claude/` (gitignorada) porque son preferencia local del dueño, no método repartido.
+    sembrar_hook_canario(destino)
+    sembrar_config_canario(destino)
     (destino / "README.md").write_text(
         generar_readme(titulo, frase, remoto_meta, destino.name), encoding="utf-8")
     # setup.py: deja el workspace listo en cualquier ordenador (lee repos.yaml, clona o

@@ -30,6 +30,9 @@ existe `.claude/personalidad.md`, aplícalo desde tu primera respuesta (CÓMO ha
 
    Un rol = una sesión: **no se mezclan**. Por defecto: CONSTRUCTOR. Para tocar flujos asume
    ANALISTA DE FLUJOS (regla 14). Permisos y gates: `docs/00-metodo/roles.md`.
+6. **Mira el canario:** `python3 docs/00-metodo/scripts/canario.py`, y otra vez tras cada tarea larga. Si avisa
+   —capacidad ("zona de riesgo") o conducta ("ya está degradando")— pega el parte de `canario.py retomada` y di
+   que esta sesión está degradada: conviene cortar y seguir en una NUEVA. En Codex, sin hook, es el ÚNICO mecanismo.
 
 ## Orden de lectura (router) — lee solo lo que tu tarea necesita
 
