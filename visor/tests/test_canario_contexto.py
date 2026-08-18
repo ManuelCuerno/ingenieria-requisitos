@@ -129,6 +129,72 @@ class BaseCanario(unittest.TestCase):
                                     codex_sessions=self.codex)
 
 
+class OrtografiaDeRutaTest(BaseCanario):
+    """Bug 024: el harness guarda la sesión con el cwd TAL CUAL lo vio; el canario debe
+    encontrarla aunque la ruta lleve un symlink por medio (/var → /private/var en macOS)
+    o se entre por la otra ortografía. Rojo sin el arreglo, verde con él."""
+
+    def _workspace_con_symlink(self):
+        real = self.base / "workspace-real"
+        real.mkdir()
+        enlace = self.base / "workspace-enlace"
+        try:
+            enlace.symlink_to(real, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("este sistema no permite crear symlinks (Windows sin privilegio)")
+        return real, enlace
+
+    def test_sesion_guardada_con_la_ruta_del_symlink_se_encuentra(self):
+        # El usuario trabaja entrando por el enlace: el harness nombra la carpeta con ESA
+        # ortografía. Es exactamente el caso de los 26 rojos del 18-08 (TMPDIR /var vs
+        # /private/var).
+        real, enlace = self._workspace_con_symlink()
+        self.sesion_claude(tokens=100_000, cwd=str(enlace))
+
+        informe = canario.diagnosticar(raiz=enlace, cwd=enlace,
+                                       claude_projects=self.claude,
+                                       codex_sessions=self.codex)
+
+        self.assertEqual(informe["veredicto"], "sano")
+        self.assertEqual(informe["harness"], "claude")
+
+    def test_sesion_guardada_con_la_ruta_real_se_encuentra_entrando_por_el_enlace(self):
+        # El caso inverso: el harness guardó la ortografía CANÓNICA (resuelta del todo) y
+        # el usuario invoca el canario desde la ruta simbólica. La canónica es el puente:
+        # una tercera ortografía intermedia no es alcanzable y queda fuera del contrato.
+        real, enlace = self._workspace_con_symlink()
+        self.sesion_claude(tokens=100_000, cwd=str(real.resolve()))
+
+        informe = canario.diagnosticar(raiz=enlace, cwd=enlace,
+                                       claude_projects=self.claude,
+                                       codex_sessions=self.codex)
+
+        self.assertEqual(informe["veredicto"], "sano")
+
+    def test_un_rollout_de_codex_con_la_otra_ortografia_tambien_cuenta(self):
+        real, enlace = self._workspace_con_symlink()
+        self.sesion_codex(tokens=100_000, cwd=str(enlace))
+
+        informe = canario.diagnosticar(raiz=real, cwd=real,
+                                       claude_projects=self.claude,
+                                       codex_sessions=self.codex)
+
+        self.assertEqual(informe["harness"], "codex")
+        self.assertEqual(informe["veredicto"], "sano")
+
+    def test_el_techo_de_ascenso_sigue_en_pie_con_symlink(self):
+        # La doble ortografía no puede reabrir la puerta que _ancestros cerró: una sesión
+        # del PADRE del workspace sigue sin colarse.
+        real, enlace = self._workspace_con_symlink()
+        self.sesion_claude(tokens=100_000, cwd=str(self.base))
+
+        informe = canario.diagnosticar(raiz=enlace, cwd=enlace,
+                                       claude_projects=self.claude,
+                                       codex_sessions=self.codex)
+
+        self.assertEqual(informe["veredicto"], "sin_datos")
+
+
 class CapacidadClaudeTest(BaseCanario):
     """R1 / R3 / R-1701: el % de la ventana y el veredicto a los dos lados del umbral."""
 

@@ -175,6 +175,23 @@ def _rutas_por_defecto():
     return Path(claude), Path(codex)
 
 
+def _variantes(ruta):
+    """La ruta tal cual llegó y su forma resuelta: AMBAS ortografías cuentan.
+
+    El harness nombra la carpeta de sesiones con el cwd TAL CUAL lo vio; buscar solo con
+    la forma resuelta pierde la sesión cuando hay un symlink por medio (`/var` →
+    `/private/var` en macOS, 26 tests rojos en main el 18-08) o un nombre corto 8.3 en
+    Windows. Y buscar solo con la cruda pierde el caso inverso (el harness guardó la
+    resuelta). Se devuelven las dos, deduplicadas, sin tocar la red ni el overhead.
+    """
+    cruda = Path(os.path.abspath(str(ruta)))
+    try:
+        resuelta = cruda.resolve()
+    except OSError:
+        resuelta = cruda
+    return [cruda] if str(cruda) == str(resuelta) else [cruda, resuelta]
+
+
 def _ancestros(cwd, raiz=None):
     """Los directorios cuya sesión cuenta como TUYA: de `cwd` hasta la raíz del workspace.
 
@@ -185,27 +202,47 @@ def _ancestros(cwd, raiz=None):
 
     Si la raíz ES un worktree (`…/worktrees/023-x`), también cuenta el workspace que lo
     posee: ahí es donde el padre tiene abierta su sesión.
+
+    Cada nivel aporta sus DOS ortografías (bug 024): la cadena se recorre una vez desde la
+    ruta cruda y otra desde la resuelta, cada una con su propio techo, y el resultado se
+    deduplica conservando el orden.
     """
-    cwd = Path(cwd).resolve()
     if raiz is None:
-        return [cwd]
-    raiz = Path(raiz).resolve()
-    techos = [raiz]
-    if raiz.parent.name == "worktrees":
-        techos.append(raiz.parent.parent)
-    cadena = [cwd]
-    for padre in cwd.parents:
-        cadena.append(padre)
-    validos, tope_alcanzado = [], False
-    for directorio in cadena:
-        validos.append(directorio)
-        if directorio in techos:
+        return _variantes(cwd)
+    paradas, finales, techos = set(), set(), []
+    for r in _variantes(raiz):
+        paradas.add(str(r))
+        techos.append(r)
+        if r.parent.name == "worktrees":
+            dueno = r.parent.parent
+            paradas.add(str(dueno))
+            finales.add(str(dueno))
+            techos.append(dueno)
+        else:
+            finales.add(str(r))
+    validos, vistos, tope_alcanzado = [], set(), False
+    for inicio in _variantes(cwd):
+        recorrido, alcanzado = [], False
+        for directorio in [inicio, *inicio.parents]:
+            recorrido.append(directorio)
+            if str(directorio) in paradas:
+                alcanzado = True
+                if str(directorio) in finales:
+                    break
+        if not alcanzado:
+            # esta ortografía queda fuera del workspace: solo cuenta ella, sin escalar.
+            recorrido = [inicio]
+        else:
             tope_alcanzado = True
-            if directorio == techos[-1]:
-                break
+        for directorio in recorrido:
+            if str(directorio) not in vistos:
+                vistos.add(str(directorio))
+                validos.append(directorio)
     if not tope_alcanzado:
-        # cwd fuera del workspace: solo cuenta él, sin escalar hacia ningún padre ajeno.
-        return [cwd, *techos]
+        for techo in techos:
+            if str(techo) not in vistos:
+                vistos.add(str(techo))
+                validos.append(techo)
     return validos
 
 
@@ -250,7 +287,9 @@ def sesiones_codex(cwd, codex_sessions, raiz=None, tope=300):
     encontradas = []
     for marca, fichero in candidatos[:tope]:
         propietario = _cwd_de_rollout(fichero)
-        if propietario and str(Path(propietario)) in validos:
+        # El rollout trae el cwd escrito: aquí SÍ se pueden comparar las dos ortografías
+        # del propietario (tal cual y resuelta), no solo las del que pregunta (bug 024).
+        if propietario and any(str(v) in validos for v in _variantes(propietario)):
             encontradas.append({"harness": "codex", "fichero": fichero, "mtime": marca})
     return encontradas
 
