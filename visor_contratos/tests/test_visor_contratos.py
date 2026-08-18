@@ -295,29 +295,56 @@ class WorkspaceRealTest(unittest.TestCase):
     suite corre sin meta-repo (CI del repo de código a secas).
     """
 
-    WORKSPACE = BASE.parent.parent.parent
+    @staticmethod
+    def workspace_real():
+        """El meta-repo se busca subiendo por los padres, no asumiendo la
+        profundidad del checkout: vale igual desde main/ que desde
+        worktrees/<unidad>/ (mitad pendiente del bug 019)."""
+        for candidato in BASE.parents:
+            if (candidato / "docs" / "05-trabajo").is_dir():
+                return candidato
+        return None
 
     def setUp(self):
-        if not (self.WORKSPACE / "docs" / "05-trabajo").is_dir():
-            self.skipTest("no hay meta-repo junto a este worktree")
+        self.WORKSPACE = self.workspace_real()
+        if self.WORKSPACE is None:
+            self.skipTest("no hay meta-repo por encima de este checkout")
         self.servidor = ServidorDePrueba(self.WORKSPACE)
         self.addCleanup(self.servidor.parar)
 
+    def unidades_reales(self):
+        """Las carpetas NNN-slug con especificacion.md que existen HOY en el
+        meta-repo — el test se ancla a lo que hay, no a un nombre grabado que
+        se archiva y deja el test ciego (bug 019)."""
+        trabajo = self.WORKSPACE / "docs" / "05-trabajo"
+        return sorted(
+            p.name for p in trabajo.iterdir()
+            if p.is_dir() and (p / "especificacion.md").is_file()
+        )
+
     def test_lista_las_unidades_reales_del_workspace(self):
+        reales = self.unidades_reales()
+        if not reales:
+            self.skipTest("el meta-repo no tiene ninguna unidad activa ahora mismo")
         _, _, cuerpo = self.servidor.pedir("/unidades.json")
         unidades = json.loads(cuerpo)["unidades"]
-        self.assertGreaterEqual(len(unidades), 1)
-        nombres = [u["unidad"] for u in unidades]
-        self.assertIn("009-revisar-contratos", nombres)
+        nombres = sorted(u["carpeta"] for u in unidades)
+        self.assertEqual(nombres, reales,
+                         "el visor debe listar EXACTAMENTE las unidades de docs/05-trabajo")
         for u in unidades:
             with self.subTest(unidad=u["unidad"]):
                 self.assertNotIn("#", u["aprobado"], "comentario YAML sin recortar")
                 self.assertNotIn("#", u["tipo"])
 
-    def test_sirve_el_contrato_de_esta_misma_unidad(self):
-        _, _, cuerpo = self.servidor.pedir("/contrato/009-revisar-contratos.md")
-        self.assertIn("## Qué (el contrato, en idioma de negocio)", cuerpo)
-        self.assertIn("## Criterios de aceptación", cuerpo)
+    def test_sirve_el_contrato_de_una_unidad_viva(self):
+        _, _, cuerpo = self.servidor.pedir("/unidades.json")
+        unidades = json.loads(cuerpo)["unidades"]
+        if not unidades:
+            self.skipTest("el meta-repo no tiene ninguna unidad activa ahora mismo")
+        viva = unidades[0]["carpeta"]
+        _, _, contrato = self.servidor.pedir(f"/contrato/{viva}.md")
+        self.assertIn("## Qué (el contrato, en idioma de negocio)", contrato)
+        self.assertIn("## Criterios de aceptación", contrato)
 
 
 def bloque_paleta(texto):
