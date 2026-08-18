@@ -436,5 +436,86 @@ class OrdenBlufTest(unittest.TestCase):
         self.assertTrue(self.plegada("Plan de trabajo"))
 
 
+def _extraer_script_de_render(texto_plantilla):
+    """El segundo bloque <script> de la plantilla es el que trocea/pinta el
+    Markdown; el primero solo gestiona el tema claro/oscuro."""
+    bloques = re.findall(r"<script>(.*?)</script>", texto_plantilla, re.S)
+    if len(bloques) < 2:
+        raise AssertionError("la plantilla no tiene los 2 <script> esperados")
+    return bloques[1]
+
+
+class MarkdownDeParrafoTest(unittest.TestCase):
+    """Regresión: un párrafo que EMPIEZA por `**negrita` no debe colgar el
+    render. Bug real hallado el 2026-08-18 con el contrato de la unidad
+    059-render-tex-poemas de `la-tercera-mano-agents`: el corte de párrafo
+    usaba una regex (`^[-*>|#]`) más laxa que la de entrada a lista
+    (`^([-*]|\\d+\\.)\\s+`), así que una línea `**Texto...` se leía como "ya
+    es otro bloque" sin serlo, el bucle de párrafo paraba sin consumirla NI
+    avanzar el índice, y `bloques()` se quedaba mirando la misma línea para
+    siempre. Se ejecuta el JS real con Node (no una réplica en Python) para
+    que el test falle si alguien reintroduce la misma divergencia; si esta
+    máquina no tiene `node`, se salta en vez de fallar por un hueco ajeno."""
+
+    ARNES = """
+    global.document = {getElementById: function(){return {classList:{remove:function(){},
+      add:function(){}}, addEventListener:function(){}, value:""};}, addEventListener:function(){}};
+    global.window = {innerWidth: 1200, matchMedia: function(){return {matches:false,
+      addEventListener:function(){}};}};
+    global.location = {hash: ""};
+    global.localStorage = {getItem:function(){return null;}, setItem:function(){}};
+    global.fetch = function(){return Promise.resolve({ok:true});};
+    global.setInterval = function(){};
+    %s
+    var __html = global.__bloques(JSON.parse(process.argv[2]));
+    process.stdout.write(__html);
+    """
+
+    def setUp(self):
+        if shutil.which("node") is None:
+            self.skipTest("node no está instalado en esta máquina")
+        texto = PLANTILLA.read_text(encoding="utf-8")
+        script = _extraer_script_de_render(texto)
+        # Expone `bloques` sin tocar el resto del módulo (se ejecuta tal cual).
+        script = script.replace(
+            "cargarUnidades();",
+            "global.__bloques = bloques; if (false) cargarUnidades();",
+            1,
+        )
+        self.arnes = self.ARNES % script
+
+    def _renderizar(self, lineas, tope_segundos=5):
+        import subprocess
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".js", delete=False, encoding="utf-8"
+        ) as f:
+            f.write(self.arnes)
+            ruta = f.name
+        try:
+            return subprocess.run(
+                ["node", ruta, json.dumps(lineas)],
+                capture_output=True, text=True, timeout=tope_segundos,
+            )
+        finally:
+            Path(ruta).unlink(missing_ok=True)
+
+    def test_parrafo_que_empieza_en_negrita_no_cuelga(self):
+        try:
+            resultado = self._renderizar(["", "**Corrección de alcance:** el resto del párrafo."])
+        except Exception as exc:  # subprocess.TimeoutExpired
+            self.fail("bloques() se colgó con un párrafo que empieza en **negrita: " + str(exc))
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        self.assertIn("<strong>Corrección de alcance:</strong>", resultado.stdout)
+        self.assertIn("el resto del párrafo.", resultado.stdout)
+
+    def test_parrafo_con_negrita_al_inicio_sigue_siendo_un_solo_parrafo(self):
+        resultado = self._renderizar(["**Decisión:** A.", "Segunda línea del mismo párrafo."])
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        # Un solo <p>: la segunda línea es continuación, no un párrafo aparte.
+        self.assertEqual(resultado.stdout.count("<p>"), 1)
+        self.assertIn("Segunda línea del mismo párrafo.", resultado.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
