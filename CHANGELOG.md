@@ -4,6 +4,17 @@ La versión del método viaja con cada proyecto (en su `METODO.json`). Para llev
 estas mejoras a tus proyectos ya creados: abre tu agente aquí y dile «pon al día
 mis proyectos».
 
+## 1.4.0 — 2026-08-18
+
+**Canario de contexto.** Un comando avisa cuando la sesión se está llenando o ya está
+repitiéndose, y `canario.py retomada` deja el parte para continuar en una sesión nueva sin
+releer nada. En Claude Code, además, el aviso salta solo al auto-compactar. Dos señales con
+avisos distintos — capacidad (% de la ventana del modelo, umbral configurable por modelo,
+default 80 %) y conducta (el mismo comando fallando repetido: eso ya es degradación) — y
+overhead cero: solo lee los ficheros de sesión que el harness ya escribe. Un harness o un
+modelo desconocidos degradan a silencio o a incertidumbre declarada, jamás a un arranque
+roto ni a un número inventado.
+
 ## 1.3.0 — 2026-08-12
 
 Nacida del feedback de campo de la primera semana con usuarios: cuatro quejas reales
