@@ -1,11 +1,13 @@
 """Unidad 018: `push: usuario` — el método nunca escribe en el remoto por su cuenta.
 
 Diseño: investigación 007 (`docs/05-trabajo/archivo/007-metodo-sin-tocar-remoto/hallazgos.md`),
-tabla R2, puntos 3-6. Los puntos de LECTURA (fetch/clone/pull) y el hook `pre-push` NO cambian
-y esta suite no los toca.
+tabla R2, puntos 3-6. Los puntos de LECTURA (fetch/clone/pull) no cambian y esta suite no los
+toca. `HookPostCierreDeadlockTest` sí toca el hook `pre-push`: es la regresión del bug 020
+(el recibo/aviso que este mismo módulo prueba arriba quedaba vetado por ese hook).
 """
 
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -18,8 +20,10 @@ from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[2]
 SCRIPTS = RAIZ / "plantilla/docs/00-metodo/scripts"
+PLANTILLAS = RAIZ / "plantilla/docs/00-metodo/plantillas"
 RUNBOOKS = RAIZ / "plantilla/docs/00-metodo/runbooks"
 BOOTSTRAP = RAIZ / "visor/bootstrap.py"
+HOOK = RAIZ / "plantilla/githooks/pre-push"
 
 # Los 8 runbooks de tipo con el paso "commit, push y PR" del constructor (007, R2 punto 3).
 RUNBOOKS_DE_TIPO = ("feature", "bug", "directo", "migracion", "refactor", "hotfix",
@@ -244,6 +248,186 @@ class AvisoPostCierreTest(WorkspaceGitTest):
         with contextlib.redirect_stdout(buffer):
             modulo.avisar_principal_sin_empujar(self.repo, "main")
         return buffer.getvalue()
+
+
+class HookPostCierreDeadlockTest(WorkspaceGitTest):
+    """020: el recibo/aviso post-cierre, ejecutado tal cual se imprime, ya no lo veta el
+    propio hook `pre-push` que el método instala.
+
+    Reproducción end-to-end sobre el fixture con remoto bare: `unidad.py cerrar` real (borra
+    la rama NNN local, reconcilia el proceso a `terminal` y anota `fusion:` en la ficha) y
+    LUEGO se ejecuta el comando exacto del recibo/aviso contra ese mismo remoto, con el hook
+    real instalado. Antes del arreglo, el push moría con "PUSH BLOQUEADO" pese a ser
+    exactamente el camino que la 018 promete.
+    """
+
+    def setUp(self):
+        super().setUp()
+        plantillas = self.ws / "docs/00-metodo/plantillas"
+        plantillas.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(PLANTILLAS / "bug.md", plantillas / "bug.md")
+        (self.ws / "docs/bugs").mkdir(parents=True, exist_ok=True)
+        (self.ws / "docs/05-trabajo/peticiones").mkdir(parents=True, exist_ok=True)
+        conocimiento = self.ws / "docs/decisiones/004-paleta.md"
+        conocimiento.parent.mkdir(parents=True, exist_ok=True)
+        conocimiento.write_text("# Paleta vigente\n", encoding="utf-8")
+        # El linter REAL exige un workspace bootstrapeado entero; aquí se prueba el hook y el
+        # cierre, no el linter (ya tiene su propia suite) — como ya hace
+        # `test_cierre_archiva_antes_del_lint_y_reconcilia_al_final` en test_peticion_unidad.py.
+        (self.ws / "docs/00-metodo/scripts/lint_metodo.py").write_text(
+            "import sys\nsys.exit(0)\n", encoding="utf-8"
+        )
+        self.peticion = self.ws / "docs/00-metodo/scripts/peticion.py"
+
+        # El hook real, instalado como lo hace bootstrap.py (core.hooksPath -> .githooks).
+        githooks = self.ws / ".githooks"
+        githooks.mkdir(parents=True, exist_ok=True)
+        hook = githooks / "pre-push"
+        shutil.copy2(HOOK, hook)
+        hook.chmod(hook.stat().st_mode | 0o111)
+        self.git(self.repo, "config", "core.hooksPath", str(githooks.resolve()))
+        # `despachar` arranca cada rama NNN desde `origin/<principal>`; con el auto-tracking
+        # de git, `git branch -d` mediría el merge contra ESA rama remota en vez de contra
+        # HEAD, y como el modo `push: usuario` deja `origin/main` deliberadamente atrás
+        # (es la ventana que el recibo/aviso describe), la borrada real fallaría por un
+        # motivo ajeno a este bug. Sin tracking, `-d` mide contra HEAD como pretende el
+        # cierre (runbooks/cierre.md: "borra el worktree y la rama local").
+        self.git(self.repo, "config", "branch.autoSetupMerge", "false")
+
+    def ejecutar_script(self, script, *args):
+        return subprocess.run(
+            [sys.executable, str(script), *args], cwd=self.ws,
+            text=True, encoding="utf-8", errors="replace", capture_output=True,
+        )
+
+    def cerrar_bug_fusionado(self, slug="hook-post-cierre"):
+        """Lleva un bug hasta `unidad.py cerrar` en verde, con el trabajo YA fusionado en
+        `main` como lo dejaría el padre antes de cerrar. Devuelve (resultado_cerrar, nombre)."""
+        capturada = self.ejecutar_script(
+            self.peticion, "capturar", "--resumen", "Bug de prueba",
+            "--texto", "Repro determinista", "--autor", "Test",
+        )
+        self.assertEqual(capturada.returncode, 0, capturada.stderr)
+        pid = re.search(r"P-\d{8}-[a-f0-9]{8}", capturada.stdout).group(0)
+        sha_base = self.git(self.repo, "rev-parse", "HEAD")
+        evaluada = self.ejecutar_script(
+            self.peticion, "evaluar", pid, "--ruta", "bug", "--investigacion", "ninguna",
+            "--motivo", "contraste suficiente para encaminar", "--flujo", "REC-1",
+            "--huella-flujo", "planos-v1", "--sha", sha_base,
+            "--ruta-codigo", "app.py", "--conocimiento", "docs/decisiones/004-paleta.md",
+        )
+        self.assertEqual(evaluada.returncode, 0, evaluada.stderr)
+
+        creada = self.ejecutar_script(self.unidad, "nueva", "bug", slug, "--desde", pid)
+        self.assertEqual(creada.returncode, 0, creada.stdout + creada.stderr)
+        ficha = next((self.ws / "docs/bugs").glob(f"[0-9][0-9][0-9]-{slug}.md"))
+        nombre = ficha.stem
+
+        # El contrato mínimo (aprobado + prosa real) y el despacho REAL: es `despachar` quien
+        # registra `metadata.base_sha` en el proceso — sin él el hook no tiene con qué medir
+        # si la rama enlazada contiene de verdad el commit fusionado.
+        texto = ficha.read_text(encoding="utf-8")
+        texto = re.sub(r"^aprobado:.*$", "aprobado: 2026-08-18", texto, count=1, flags=re.M)
+        texto = texto.replace(
+            "- **Qué pasa de verdad:** <el síntoma, con ejemplo concreto: datos, pasos, "
+            "resultado>",
+            "- **Qué pasa de verdad:** el arreglo determinista sobre app.py reproducido en "
+            "un workspace de juguete con remoto bare, exactamente como pide el contrato "
+            "de esta unidad de prueba, con pasos deterministas y verificables.",
+        )
+        ficha.write_text(texto, encoding="utf-8")
+
+        despachada = self.ejecutar_script(self.unidad, "despachar", nombre)
+        self.assertEqual(despachada.returncode, 0, despachada.stdout + despachada.stderr)
+        worktree = self.ws / "worktrees" / nombre
+        self.assertTrue(worktree.is_dir(), despachada.stdout + despachada.stderr)
+
+        # El trabajo se fusiona en main — lo que hace el padre antes de pedir el cierre.
+        (worktree / "app.py").write_text("print('arreglo')\n", encoding="utf-8")
+        self.git(worktree, "add", "-A")
+        self.git(worktree, "commit", "-m", "arregla el bug")
+        self.git(self.repo, "merge", "--ff-only", nombre)
+        self.git(self.repo, "worktree", "remove", str(worktree))
+
+        texto = ficha.read_text(encoding="utf-8")
+        texto = re.sub(r"^estado:\s*\S+", "estado: en_revision", texto, count=1, flags=re.M)
+        texto = texto.replace(
+            "- **Revisión (revisor fresco, ANTES del merge):** LIMPIO | HUECOS DE CORRECCIÓN "
+            "→ <cuáles;\n  cada uno vuelve al subagente antes del merge> · Fecha: YYYY-MM-DD",
+            "- **Revisión (revisor fresco, ANTES del merge):** LIMPIO · Fecha: 2026-08-18",
+        )
+        ficha.write_text(texto, encoding="utf-8")
+
+        resultado = self.ejecutar_script(
+            self.unidad, "cerrar", nombre, "--ok-usuario", "2026-08-18",
+        )
+        return resultado, nombre
+
+    def test_push_usuario_recibo_post_cierre_ya_no_esta_bloqueado(self):
+        self.repos_yaml("usuario")
+        antes = self.sha_remoto()
+
+        cerrado, nombre = self.cerrar_bug_fusionado("push-usuario")
+
+        self.assertEqual(cerrado.returncode, 0, cerrado.stdout + cerrado.stderr)
+        self.assertIn("push: usuario", cerrado.stdout)
+        comando = re.search(r"git -C \S+ push origin main", cerrado.stdout)
+        self.assertIsNotNone(comando, cerrado.stdout)
+        # La rama NNN local ya no existe: es justo la reproducción del deadlock (020).
+        ramas = self.git(self.repo, "branch", "--list", nombre)
+        self.assertEqual(ramas, "")
+        self.assertEqual(self.sha_remoto(), antes)
+
+        push = subprocess.run(comando.group(0).split(), cwd=self.ws,
+                              text=True, capture_output=True)
+
+        self.assertEqual(push.returncode, 0, push.stdout + push.stderr)
+        self.assertNotIn("PUSH BLOQUEADO", push.stderr)
+        self.assertNotEqual(self.sha_remoto(), antes)
+
+    def test_warn_modo_agente_post_cierre_ya_no_esta_bloqueado(self):
+        self.repos_yaml()  # sin `push:` → modo agente, el WARN clásico
+        antes = self.sha_remoto()
+
+        cerrado, nombre = self.cerrar_bug_fusionado("warn-agente")
+
+        self.assertEqual(cerrado.returncode, 0, cerrado.stdout + cerrado.stderr)
+        self.assertIn("WARN", cerrado.stdout)
+        self.assertIn("base vieja", cerrado.stdout)
+        comando = re.search(r"git -C \S+ push origin main", cerrado.stdout)
+        self.assertIsNotNone(comando, cerrado.stdout)
+        ramas = self.git(self.repo, "branch", "--list", nombre)
+        self.assertEqual(ramas, "")
+
+        push = subprocess.run(comando.group(0).split(), cwd=self.ws,
+                              text=True, capture_output=True)
+
+        self.assertEqual(push.returncode, 0, push.stdout + push.stderr)
+        self.assertNotIn("PUSH BLOQUEADO", push.stderr)
+        self.assertNotEqual(self.sha_remoto(), antes)
+
+    def test_commit_directo_a_main_sigue_bloqueado_tras_un_cierre_legitimo(self):
+        # No se relaja el bloqueo de los pushes de verdad no trazados (alcance del bug 020):
+        # un commit directo posterior al recibo, sin pasar por ninguna unidad, sigue vetado.
+        self.repos_yaml("usuario")
+        cerrado, _ = self.cerrar_bug_fusionado("push-usuario-directo")
+        self.assertEqual(cerrado.returncode, 0, cerrado.stdout + cerrado.stderr)
+        comando = re.search(r"git -C \S+ push origin main", cerrado.stdout)
+        self.assertIsNotNone(comando, cerrado.stdout)
+        subprocess.run(comando.group(0).split(), cwd=self.ws,
+                       text=True, capture_output=True, check=True)
+
+        (self.repo / "intruso.txt").write_text("commit directo sin unidad\n", encoding="utf-8")
+        self.git(self.repo, "add", "-A")
+        self.git(self.repo, "commit", "-m", "directo")
+
+        push = subprocess.run(
+            ["git", "-C", str(self.repo), "push", "origin", "main"],
+            text=True, capture_output=True,
+        )
+
+        self.assertNotEqual(push.returncode, 0)
+        self.assertIn("PUSH BLOQUEADO", push.stderr)
 
 
 class LintModoPushTest(unittest.TestCase):

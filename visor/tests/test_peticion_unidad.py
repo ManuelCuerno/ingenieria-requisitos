@@ -1837,6 +1837,84 @@ class PrePushPeticionesTest(unittest.TestCase):
 
         self.assertEqual(resultado.returncode, 0, resultado.stderr)
 
+    def _unidad_fusionada_y_reconciliada(self, nombre="001-cambio",
+                                          pid="P-20260804-1234abcd"):
+        """Reproduce el estado que deja `unidad.py cerrar` (020): la rama NNN local YA NO
+        existe, el proceso de la petición ya está `terminal` (y la petición puede estar
+        `cerrada`) y la ficha conserva `fusion: <sha>` como única prueba. Devuelve
+        (repo, sha_fusionado, base_sha)."""
+        carpeta = self.ws / "docs/05-trabajo" / nombre
+        carpeta.mkdir(parents=True)
+        repo = self.ws / "main"
+        repo.mkdir()
+        subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+        (repo / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, capture_output=True)
+        base = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+            text=True, capture_output=True,
+        ).stdout.strip()
+        subprocess.run(["git", "checkout", "-b", nombre], cwd=repo, check=True, capture_output=True)
+        (repo / "README.md").write_text("base\ncambio\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-m", "cambio"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "checkout", "main"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(["git", "merge", "--ff-only", nombre], cwd=repo, check=True, capture_output=True)
+        sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+            text=True, capture_output=True,
+        ).stdout.strip()
+        # El cierre borra la rama local ANTES de imprimir el recibo/aviso (020).
+        subprocess.run(["git", "branch", "-D", nombre], cwd=repo, check=True, capture_output=True)
+
+        (carpeta / "especificacion.md").write_text(
+            f"---\nunidad: {nombre}\n"
+            f"peticiones: [{pid}@1]\nfusion: {sha}\n---\n" + "contrato escrito " * 40,
+            encoding="utf-8",
+        )
+        peticion = self.ws / "docs/05-trabajo/peticiones" / pid
+        peticion.mkdir(parents=True)
+        (peticion / "peticion.json").write_text(json.dumps({
+            "id": pid, "estado": "cerrada", "resultado": "entregada", "revision": 1,
+            "evaluaciones": [{"revision": 1, "investigacion": {"perfil": "ninguna"}}],
+            "procesos": [{
+                "tipo": "unidad", "ref": nombre, "revision": 1, "estado": "terminal",
+                "metadata": {"base_sha": base, "principal": "main"},
+            }],
+        }), encoding="utf-8")
+        return repo, sha, base
+
+    def test_recibo_post_cierre_pasa_con_proceso_terminal_y_fusion_anotada(self):
+        # 020: el mismo `git push origin main` que el cierre imprime como recibo (push:
+        # usuario) o como WARN (modo agente) ya no lo veta el hook que lo emitió.
+        _, sha, _ = self._unidad_fusionada_y_reconciliada()
+
+        resultado = self.ejecutar("main", sha=sha)
+
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+
+    def test_fusion_anotada_no_autoriza_un_commit_directo_posterior(self):
+        # 020, regresión: la prueba de fusión anotada liga SOLO al commit que cerró esa
+        # unidad. Un commit directo posterior a main (no trazado por ninguna unidad) sigue
+        # bloqueado, aunque la principal siga conteniendo esa fusión legítima como antepasado.
+        repo, sha_legitimo, _ = self._unidad_fusionada_y_reconciliada()
+        (repo / "intruso.txt").write_text("commit directo sin rama\n", encoding="utf-8")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-m", "directo"], cwd=repo, check=True, capture_output=True)
+        sha_intruso = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=repo, check=True,
+            text=True, capture_output=True,
+        ).stdout.strip()
+        self.assertNotEqual(sha_intruso, sha_legitimo)
+
+        resultado = self.ejecutar("main", sha=sha_intruso)
+
+        self.assertEqual(resultado.returncode, 1)
+        self.assertIn("principal", resultado.stderr.lower())
+
 
 class ContratoTextualPeticionesTest(unittest.TestCase):
     def texto(self, ruta):

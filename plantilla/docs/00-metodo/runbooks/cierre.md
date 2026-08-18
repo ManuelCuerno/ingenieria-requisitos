@@ -42,6 +42,19 @@ ajeno) y el `git -C main push origin main` **queda prohibido para el método**: 
 usuario como recibo del cierre —`unidad.py cerrar` lo dice con el conteo de commits— y lo
 ejecuta él cuando quiera, con sus propios controles. El método se detiene exactamente ahí.
 
+**El hook `pre-push` deja pasar exactamente ese recibo (020).** El cierre borra la rama NNN
+local y reconcilia su proceso (pasa a `terminal`) ANTES de imprimir el recibo/aviso — así que,
+cuando el usuario ejecuta el comando, el hook ya no ve una rama `pendiente`: ve un proceso
+`terminal` y una ficha con `fusion: <sha>` anotada por el propio cierre. El hook acepta ESE
+caso con una condición estricta: el `sha` que se empuja tiene que coincidir EXACTO con el
+`fusion:` anotado, no basta con que sea un antepasado suyo. Sin esa igualdad exacta, cualquier
+push futuro de la principal quedaría autorizado en cuanto una sola unidad se hubiera cerrado
+alguna vez con esa prueba — justo el commit directo no trazado que el hook existe para
+bloquear. Ventana que queda abierta, con honestidad: si entre el cierre y el push alguien
+añade, reescribe o reordena un commit sobre `main` (otro cierre, un rebase, un amend), ese sha
+ya no es el anotado y el hook vuelve a bloquear — hay que repetir el comando exacto que el
+recibo imprimió, sin tocarlo, o cerrar de nuevo para que anote la fusión vigente.
+
 **La excepción nombrada de `main/`.** La regla es que `main/` es de solo lectura
 (`AGENTS.md`). El camino B la rompe una vez, a propósito y con nombre: **el merge del paso 3
 de este ritual, y nada más**. Ni editar ficheros, ni crear ramas, ni commitear a mano allí.

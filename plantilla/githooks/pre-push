@@ -165,6 +165,21 @@ def push_principal_trazado(sha):
                 rama, sha, proceso
             ):
                 return True
+    # La rama local ya no tiene por qué existir: `unidad.py cerrar` la borra, reconcilia el
+    # proceso (pasa a `terminal`) y SOLO DESPUÉS imprime el recibo/aviso con el mismo `git push`
+    # (020). Sin esto, el propio recibo del cierre queda vetado por el hook que lo emite. La
+    # rama viva sigue siendo la fuente de verdad mientras exista (bucle de arriba); esto es la
+    # segunda pasada, solo para unidades ya cerradas con prueba de fusión anotada en su ficha.
+    for unidad in unidades_con_fusion_anotada():
+        fusion = fusion_de(unidad)
+        referencias = referencias_de_unidad(unidad)
+        procesos = [
+            proceso_unidad_reconciliado(referencia, unidad) for referencia in referencias
+        ]
+        if referencias and all(procesos) and all(
+            fusion_contenida(fusion, sha, proceso) for proceso in procesos
+        ) and prosa(unidad) >= MIN_PROSA:
+            return True
     return False
 
 
@@ -193,6 +208,81 @@ def proceso_unidad(referencia, unidad):
         ),
         None,
     )
+
+
+def proceso_unidad_reconciliado(referencia, unidad):
+    """Como `proceso_unidad`, pero para el proceso YA reconciliado por el cierre (`terminal`).
+
+    El cierre puede dejar la petición `cerrada` (con `resultado: entregada`) al reconciliar su
+    único proceso — eso es éxito, no motivo para descartarla como `proceso_unidad` hace con
+    cualquier petición cerrada/cancelada. Solo `cancelada` sigue siendo descarte.
+    """
+    encontrada = re.fullmatch(r"(P-\d{8}-[a-f0-9]{8})@(\d+)", referencia)
+    if not encontrada:
+        return None
+    pid, revision = encontrada.groups()
+    ruta = WORKSPACE / "docs/05-trabajo/peticiones" / pid / "peticion.json"
+    try:
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if datos.get("estado") == "cancelada":
+        return None
+    if datos.get("revision") != int(revision):
+        return None
+    tipo = "bug" if (WORKSPACE / "docs/bugs" / f"{unidad}.md").is_file() else "unidad"
+    return next(
+        (
+            proceso for proceso in datos.get("procesos", [])
+            if proceso.get("tipo") == tipo
+            and proceso.get("ref") == unidad
+            and proceso.get("revision") == int(revision)
+            and proceso.get("estado") == "terminal"
+        ),
+        None,
+    )
+
+
+def unidades_con_fusion_anotada():
+    """Nombres NNN-slug con `fusion: <sha>` en su ficha: docs/bugs/ (nunca se archivan) y
+    docs/05-trabajo/ o su archivo/ (unidades normales, ya movidas al cerrar)."""
+    nombres = set()
+    bugs = WORKSPACE / "docs/bugs"
+    if bugs.is_dir():
+        nombres.update(ruta.stem for ruta in bugs.glob("*.md"))
+    for base in (WORKSPACE / "docs/05-trabajo", WORKSPACE / "docs/05-trabajo/archivo"):
+        if base.is_dir():
+            nombres.update(
+                carpeta.name for carpeta in base.iterdir()
+                if carpeta.is_dir() and (carpeta / "especificacion.md").is_file()
+            )
+    return sorted(nombre for nombre in nombres if UNIDAD.fullmatch(nombre) and fusion_de(nombre))
+
+
+def fusion_de(unidad):
+    """El `fusion: <sha>` anotado en la ficha de `unidad`, o "" si no hay ninguno."""
+    spec = spec_de(unidad)
+    if spec is None:
+        return ""
+    encontrada = re.search(
+        r"^fusion:\s*([0-9a-fA-F]{7,40})\s*$", spec.read_text(encoding="utf-8"), re.M
+    )
+    return encontrada.group(1) if encontrada else ""
+
+
+def fusion_contenida(fusion, sha_principal, proceso):
+    """La prueba de fusión anotada es EXACTAMENTE el commit que se empuja, no un antepasado
+    suyo. Aceptar "es antepasado" bendeciría CUALQUIER push futuro de la principal una vez
+    que una sola unidad se cerrara alguna vez con esa prueba — el propio commit no trazado
+    que este hook existe para bloquear quedaría contenido en la principal igual que el
+    legítimo. La coincidencia exacta liga el veto a ESTE push, no a la historia entera."""
+    metadata = (proceso or {}).get("metadata") or {}
+    base = metadata.get("base_sha", "")
+    if not base or not fusion or fusion == base or fusion != sha_principal:
+        return False
+    if git_repo("cat-file", "-e", f"{fusion}^{{commit}}").returncode != 0:
+        return False
+    return git_repo("merge-base", "--is-ancestor", base, fusion).returncode == 0
 
 
 def peticion_expres_valida(pid, rama):
