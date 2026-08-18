@@ -184,7 +184,10 @@ class RutasDelVisorTest(unittest.TestCase):
             "/contrato/009-revisar-contratos.md"
         )
         self.assertEqual(200, codigo)
-        self.assertEqual(CONTRATO_009, cuerpo)
+        # En Windows, Path.write_text() traduce \n a \r\n al escribir el
+        # fixture (modo texto universal); el propio contenido servido es
+        # idéntico línea a línea, así que se normaliza antes de comparar.
+        self.assertEqual(CONTRATO_009, cuerpo.replace("\r\n", "\n"))
         self.assertIn("charset=utf-8", cabeceras["Content-Type"])
         self.assertEqual("no-store", cabeceras["Cache-Control"])
 

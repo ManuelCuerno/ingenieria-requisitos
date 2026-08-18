@@ -169,6 +169,18 @@ def ficha_unidad(nombre, rol=None):
     raise ErrorEjecucion(f"no existe la ficha canónica de {nombre}")
 
 
+def _real(path):
+    """Forma canónica para COMPARAR rutas, nunca para mostrarlas.
+
+    ``Path.resolve()`` no basta en Windows: el propio runner de CI reporta el
+    mismo directorio unas veces con su alias corto 8.3 (``RUNNER~1``) y otras
+    con el nombre largo (``runneradmin``) según qué proceso lo emita (Python
+    vs. git), y comparar esas dos cadenas como texto los ve como rutas
+    distintas aunque sean el mismo inodo. ``os.path.realpath`` sí normaliza
+    ambas formas al mismo resultado en las tres plataformas."""
+    return os.path.realpath(str(path))
+
+
 def inventario_worktrees():
     codigo, salida = git(MAIN, "worktree", "list", "--porcelain")
     if codigo:
@@ -177,7 +189,7 @@ def inventario_worktrees():
     actual = None
     for linea in salida.splitlines():
         if linea.startswith("worktree "):
-            actual = Path(linea[9:]).resolve()
+            actual = _real(linea[9:])
             inventario[actual] = {}
         elif actual is not None and " " in linea:
             clave, valor = linea.split(" ", 1)
@@ -187,9 +199,9 @@ def inventario_worktrees():
 
 def resolver_worktree(nombre):
     destino = (WORKTREES / nombre).resolve()
-    if destino.parent != WORKTREES.resolve():
+    if _real(destino.parent) != _real(WORKTREES):
         raise ErrorEjecucion("el worktree escaparía de worktrees/")
-    entrada = inventario_worktrees().get(destino)
+    entrada = inventario_worktrees().get(_real(destino))
     if entrada is None:
         raise ErrorEjecucion(f"{destino} no figura en git worktree list")
     rama_ref = entrada.get("branch")
@@ -198,7 +210,7 @@ def resolver_worktree(nombre):
             f"rama registrada incorrecta: {rama_ref or 'sin rama'}; se esperaba {nombre}"
         )
     codigo, toplevel = git(destino, "rev-parse", "--show-toplevel")
-    if codigo or Path(toplevel).resolve() != destino:
+    if codigo or _real(toplevel) != _real(destino):
         raise ErrorEjecucion("el destino no es la raíz real del worktree")
     codigo, rama = git(destino, "branch", "--show-current")
     if codigo or rama.strip() != nombre:
@@ -214,11 +226,11 @@ def resolver_worktree(nombre):
     if not encontrado:
         raise ErrorEjecucion("no puedo resolver el gitdir del worktree")
     gitdir = Path(encontrado.group(1)).resolve()
-    esperado = (MAIN / ".git/worktrees").resolve()
-    if gitdir.parent != esperado:
+    esperado = MAIN / ".git/worktrees"
+    if _real(gitdir.parent) != _real(esperado):
         raise ErrorEjecucion(f"gitdir fuera del repositorio canónico: {gitdir}")
     common = (gitdir / (gitdir / "commondir").read_text(encoding="utf-8").strip()).resolve()
-    if common != (MAIN / ".git").resolve():
+    if _real(common) != _real(MAIN / ".git"):
         raise ErrorEjecucion("commondir no pertenece a main/.git")
     return destino, gitdir, common
 
@@ -378,7 +390,8 @@ def preparar_claude_home(env, home_original):
         gh = shutil.which("gh", path=env.get("PATH"))
         if gh:
             subprocess.run(
-                [gh, "auth", "setup-git"], env=env, cwd=str(home_original),
+                comando_subproceso(gh, [gh, "auth", "setup-git"], env),
+                env=env, cwd=str(home_original),
                 stdin=subprocess.DEVNULL, capture_output=True,
             )
 
@@ -435,6 +448,68 @@ def argv_harness(harness, ejecutable, rol, worktree, texto, documentos=(), lectu
         argv.extend(("--add-dir", directorio))
     argv.append(texto)
     return argv
+
+
+def comando_subproceso(ejecutable, argv, env=None):
+    """``argv`` listo para ``subprocess.run``, envuelto si Windows lo exige.
+
+    En Windows, ``CreateProcess`` (lo que usa subprocess sin ``shell=True``) NO
+    sabe arrancar un ``.bat``/``.cmd`` directamente — hace falta el intérprete
+    de comandos con ``/c`` (documentado por Microsoft; sin esto sale
+    ``WinError 193: %1 no es una aplicación Win32 válida``). Los propios
+    ``claude``/``codex`` que instala npm en Windows son shims ``.cmd``, igual
+    que los dobles de prueba: sin este envoltorio ni el harness real arranca
+    ahí. En el resto de plataformas ``argv`` no cambia.
+
+    ``cmd.exe /c`` lee su línea de comando por LÍNEAS: un salto de línea
+    literal la trocea ahí mismo, aunque vaya entre comillas — el lector de
+    cmd.exe no es un tokenizador consciente de comillas para el fin de línea,
+    es el mismo por el que ni el propio Runbook mete scripts multilínea en el
+    shell ``cmd`` de Windows. El prompt del harness (``encargo()``) SIEMPRE
+    es multilínea, así que cruzar ``cmd.exe`` con él tal cual lo trunca en la
+    primera línea (bug 017 ronda 2). Cuando se pasa ``env`` (mutable, el mismo
+    dict que luego recibe ``subprocess.run``), cada argumento con salto de
+    línea viaja SOLO por variable de entorno (``IR_CMDARG_N``) y en la línea de
+    comando cruza únicamente una REFERENCIA literal a esa variable.
+
+    Esa referencia NO puede llevar ningún ``%``. La ronda 2 escribió
+    ``%IR_CMDARG_N%`` contando con que la sustitución de ``cmd.exe``
+    devolviera el valor intacto: no lo hace, trocea igual en el salto de línea
+    y parte el resto en palabras sueltas por los espacios sin comillas. La
+    ronda 3 escribió ``%%IR_CMDARG_N%%`` contando con que ``cmd.exe``
+    colapsara ``%%`` → ``%`` sin resolver la variable: ESA regla es la de los
+    ficheros ``.bat``, no la de la línea de comando de ``cmd /c``. Ahí el
+    parser deja literal solo el ``%`` que no abre un nombre válido (el
+    primero, porque el carácter siguiente es otro ``%``) y a continuación
+    encuentra un ``%IR_CMDARG_N%`` perfectamente válido y LO EXPANDE — el
+    valor multilínea vuelve a la línea de comando y se trunca exactamente
+    igual. Por eso las rondas 2 y 3 dieron el mismo traceback en el CI (bug
+    017 ronda 4: el harness recibía como último argv ``001-demo``, la última
+    palabra de la PRIMERA línea del encargo).
+
+    La referencia es por tanto ``##IR_CMDARG_N##``: sin ``%`` no hay expansión
+    posible ni en la línea de comando ni en el ``%*`` del propio ``.bat``, y
+    sin espacios, saltos de línea ni ninguno de los metacaracteres de cmd
+    (``& | < > ^ ( ) " %``) no hay nada que trocear. Quien recibe ese literal
+    es responsabilidad de quien lo procesa: el doble de prueba lo resuelve
+    leyendo la variable de su propio entorno heredado (que sí viaja intacto,
+    ajeno al parser de ``cmd.exe``) para reconstruir el argumento EFECTIVO.
+    Sin ``env`` (compatibilidad con las llamadas existentes) se mantiene el
+    envoltorio simple, solo válido para argumentos de una sola línea."""
+    if not (os.name == "nt" and str(ejecutable).lower().endswith((".bat", ".cmd"))):
+        return argv
+    comspec = os.environ.get("ComSpec", "cmd.exe")
+    if env is None:
+        return [comspec, "/c", *argv]
+    comando = [comspec, "/c", argv[0]]
+    for indice, valor in enumerate(argv[1:]):
+        if isinstance(valor, str) and ("\n" in valor or "\r" in valor):
+            clave = f"IR_CMDARG_{indice}"
+            env[clave] = valor
+            comando.append(f"##{clave}##")
+        else:
+            comando.append(valor)
+    return comando
 
 
 def evidencia_git(worktree):
@@ -564,7 +639,7 @@ def _lanzar_bajo_lease(args, ficha, manager, autoridades):
             # intermedia (unidad 012: la garantía real, Aurora/ADR-022, era esto, no el
             # aislamiento de SO).
             resultado = subprocess.run(
-                argv, cwd=str(worktree), env=env,
+                comando_subproceso(ejecutable, argv, env), cwd=str(worktree), env=env,
                 stdin=subprocess.DEVNULL, timeout=tope * 60 if tope else None,
             )
         except subprocess.TimeoutExpired as exc:

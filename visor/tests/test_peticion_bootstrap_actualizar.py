@@ -85,9 +85,12 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         self._proceso = proceso
         return proceso, ready, gate
 
-    def esperar_barrera(self, ready, timeout=20):
-        # 20 s: en Windows el CI arranca un intérprete nuevo y hace todo el
-        # trabajo de Modo D hasta el failpoint; 3 s no le llegaban.
+    def esperar_barrera(self, ready, timeout=40):
+        # 40 s (ronda 2 del bug 017: 20 s seguía siendo insuficiente en runners
+        # windows-latest compartidos y con carga variable — flakeo observado en
+        # el run 32083456376, job py3.13): en Windows el CI arranca un
+        # intérprete nuevo y hace todo el trabajo de Modo D hasta el failpoint;
+        # 3 s no le llegaban, y 20 s tampoco siempre.
         proceso = getattr(self, "_proceso", None)
         limite = time.monotonic() + timeout
         while time.monotonic() < limite:
@@ -595,7 +598,7 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         ajeno = ws / "docs/05-trabajo/nota-ajena.md"
         ajeno.write_text("trabajo de otra sesión\n", encoding="utf-8")
         self.abrir_barrera(gate)
-        salida, error = proceso.communicate(timeout=10)
+        salida, error = proceso.communicate(timeout=30)
 
         self.assertEqual(proceso.returncode, 0, salida + error)
         incluidos = subprocess.run(
@@ -844,7 +847,7 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         ajeno = b"cambio concurrente en la misma ruta\n"
         (ws / "AGENTS.md").write_bytes(ajeno)
         self.abrir_barrera(gate)
-        salida, error = proceso.communicate(timeout=10)
+        salida, error = proceso.communicate(timeout=30)
 
         self.assertNotEqual(proceso.returncode, 0, salida + error)
         self.assertEqual((ws / "AGENTS.md").read_bytes(), ajeno)
@@ -884,7 +887,7 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         ajeno = b"cambio despues del stage exacto\n"
         (ws / "AGENTS.md").write_bytes(ajeno)
         self.abrir_barrera(gate)
-        salida, error = proceso.communicate(timeout=10)
+        salida, error = proceso.communicate(timeout=30)
 
         self.assertNotEqual(proceso.returncode, 0, salida + error)
         self.assertEqual((ws / "AGENTS.md").read_bytes(), ajeno)
@@ -1070,7 +1073,12 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
 
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
         for ws in workspaces:
-            self.assertIn(str(ws), resultado.stdout)
+            # os.path.realpath, no str(ws) a pelo: actualizar.py reporta la ruta ya
+            # pasada por Path.resolve(), que en Windows normaliza al nombre LARGO
+            # (runneradmin); `ws` viene de tempfile.mkdtemp() tal cual, que hereda el
+            # alias CORTO 8.3 (RUNNER~1) que trae el TMP del runner (familia 3, bug
+            # 017 — aquí en el propio test, no en el launcher).
+            self.assertIn(os.path.realpath(str(ws)), resultado.stdout)
             self.assertTrue((ws / "docs/00-metodo/scripts/peticion.py").is_file())
         self.assertEqual(resultado.stdout.count("sobrescritos"), len(workspaces))
 

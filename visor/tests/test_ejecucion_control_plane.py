@@ -5,13 +5,19 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 RAIZ = Path(__file__).resolve().parents[2]
 LAUNCHER = RAIZ / "plantilla/docs/00-metodo/scripts/ejecucion.py"
 WORKSPACE_PATHS = RAIZ / "plantilla/docs/00-metodo/scripts/workspace_paths.py"
+SCRIPTS = LAUNCHER.parent
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
+import ejecucion  # noqa: E402  (el REAL, sin mutar)
 
 
 class ControlPlaneE2ETest(unittest.TestCase):
@@ -113,27 +119,59 @@ class ControlPlaneE2ETest(unittest.TestCase):
         ruta.chmod(ruta.stat().st_mode | stat.S_IXUSR)
 
     def crear_doble_harness(self, nombre):
-        self.hacer_ejecutable(
-            self.bin / nombre,
-            """#!/usr/bin/env python3
-import json, os, pathlib, stat, subprocess, sys
+        cuerpo = """import json, os, pathlib, re, stat, subprocess, sys
 tmp = pathlib.Path(os.environ['TMPDIR'])
+
+def resolver(valor):
+    # Ronda 4 del bug 017: en Windows el argumento problemático no cruza
+    # cmd.exe tal cual — solo su REFERENCIA literal (##IR_CMDARG_N##, sin
+    # ningún '%' que cmd.exe pueda expandir) llega como argv. Quien recibe ese
+    # token debe resolverlo leyendo su propio entorno heredado (que sí viaja
+    # intacto, ajeno al parser de cmd.exe) para reconstruir el argumento
+    # EFECTIVO — eso es lo que un harness real, al ver ese literal, tendría
+    # que hacer para no perder el prompt multilínea.
+    coincide = re.fullmatch(r'##(IR_CMDARG_\\d+)##', valor) if isinstance(valor, str) else None
+    return os.environ.get(coincide.group(1), valor) if coincide else valor
+
 record = {
-    'argv': sys.argv[1:],
+    'argv': [resolver(v) for v in sys.argv[1:]],
+    # Instrumentación de la ronda 4 del bug 017: qué llegó ANTES de resolver y
+    # qué referencias había realmente en el entorno. Sin esto, un fallo en el
+    # job de Windows solo dice «el prompt no es el prompt» y no distingue
+    # «la línea de comando se truncó» de «el doble no reconstruyó».
+    'argv_crudo': list(sys.argv[1:]),
+    'cmdarg_env': {k: v for k, v in os.environ.items() if k.startswith('IR_CMDARG_')},
+    'lanzado_por': {'ejecutable': sys.executable, 'script': __file__,
+                    'comspec': os.environ.get('ComSpec'), 'os_name': os.name},
     'cwd': os.getcwd(),
     'pwd': os.environ.get('PWD'),
     'branch': subprocess.run(['git', 'branch', '--show-current'], text=True,
                              capture_output=True).stdout.strip(),
     'tmp': str(tmp),
     'tmp_mode': stat.S_IMODE(tmp.stat().st_mode),
+    # Se comprueba AQUÍ, mientras tmp todavía existe: el launcher lo borra en
+    # su propio `finally` antes de devolver el control al test (bug 017
+    # ronda 3), así que comprobarlo desde fuera después siempre da falso.
+    'tmp_accesible': os.access(tmp, os.R_OK | os.W_OK),
     'home': os.environ.get('HOME'),
     'codex_home': os.environ.get('CODEX_HOME'),
     'poison': {k: os.environ.get(k) for k in
                ('SCRATCH','BASH_ENV','ENV','ZDOTDIR','CDPATH','PYTHONPATH','NODE_OPTIONS')},
 }
 pathlib.Path('.harness-record.json').write_text(json.dumps(record))
-""",
-        )
+"""
+        if os.name == "nt":
+            # shutil.which() en Windows solo encuentra ejecutables con una
+            # extensión de PATHEXT (.bat/.cmd/.exe…); un fichero sin extensión,
+            # aunque tenga el bit +x, no cuenta ahí (bug 017 familia 2). El
+            # .bat delega en el .py real, que lleva la lógica del doble.
+            script = self.bin / f"{nombre}.py"
+            script.write_text(cuerpo, encoding="utf-8")
+            (self.bin / f"{nombre}.bat").write_text(
+                f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n', encoding="utf-8"
+            )
+        else:
+            self.hacer_ejecutable(self.bin / nombre, "#!/usr/bin/env python3\n" + cuerpo)
 
     def argumentos(self, harness="claude", rol="constructor", skills=(),
                    prompt="Haz la tarea", unidad=None):
@@ -160,27 +198,29 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         )
 
     def proceso_en_barrera(self, nombre="ejecucion_antes_harness", unidad=None):
-        ready_read, ready_write = os.pipe()
-        wait_read, wait_write = os.pipe()
+        # Barrera por ficheros: los FDs no cruzan procesos en Windows (pass_fds
+        # es POSIX). El hijo toca `ready` al llegar y espera a que exista `gate`.
+        barrera = Path(tempfile.mkdtemp(prefix="barrera-"))
+        self.addCleanup(shutil.rmtree, barrera, True)
+        ready = barrera / "ready"
+        gate = barrera / "gate"
         env = self.env.copy()
         prefijo = f"IR_FAILPOINT_{nombre.upper()}"
-        env[f"{prefijo}_READY_FD"] = str(ready_write)
-        env[f"{prefijo}_WAIT_FD"] = str(wait_read)
+        env[f"{prefijo}_READY_FILE"] = str(ready)
+        env[f"{prefijo}_WAIT_FILE"] = str(gate)
         env["IR_SESSION_ID"] = "ejecucion-a"
         proceso = subprocess.Popen(
             self.argumentos(unidad=unidad), cwd=self.main, env=env, text=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            pass_fds=(ready_write, wait_read),
         )
-        os.close(ready_write)
-        os.close(wait_read)
         self.addCleanup(lambda: proceso.poll() is None and proceso.kill())
-        import select
-        legibles, _, _ = select.select([ready_read], [], [], 5)
-        self.assertEqual(legibles, [ready_read], "el launcher no alcanzó la barrera")
-        self.assertEqual(os.read(ready_read, 1), b"1")
-        os.close(ready_read)
-        return proceso, wait_write
+        limite = time.monotonic() + 5
+        while not ready.exists():
+            self.assertLess(
+                time.monotonic(), limite, "el launcher no alcanzó la barrera"
+            )
+            time.sleep(0.01)
+        return proceso, gate
 
     def crear_unidad_paralela(self, nombre, recurso):
         ficha = self.ws / "docs/05-trabajo" / nombre / "especificacion.md"
@@ -198,6 +238,26 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
     def registros(self):
         return json.loads((self.worktree / ".harness-record.json").read_text())
 
+    def diagnostico(self, harness):
+        # Ronda 4 del bug 017: cuando estos asserts fallan en el job de Windows
+        # el único dato disponible es el log del CI, así que el mensaje lleva el
+        # harness-record ENTERO (argv resuelto y crudo, referencias IR_CMDARG_*
+        # del entorno y cómo se lanzó el doble) más el envoltorio que ejecucion.py
+        # habría construido para este ejecutable. Se conserva porque no cuesta
+        # nada en verde y es lo único que hace accionable un rojo remoto.
+        muestra = ejecucion.comando_subproceso(
+            str(self.bin / "claude.bat"),
+            [str(self.bin / "claude.bat"), "-p", "linea1\nlinea2"],
+            {},
+        )
+        return (
+            "\n--- harness-record completo (bug 017 ronda 4) ---\n"
+            + json.dumps(harness, indent=2, ensure_ascii=False)
+            + "\n--- envoltorio que construye comando_subproceso aquí ---\n"
+            + json.dumps(muestra, ensure_ascii=False)
+            + f"\n--- os.name={os.name} bin={self.bin} ---"
+        )
+
     def test_claude_arranca_en_worktree_con_entorno_saneado_y_skill_tecnica(self):
         resultado = self.ejecutar(skills=("vue-best-practices",))
 
@@ -206,15 +266,30 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertEqual(harness["cwd"], str(self.worktree.resolve()))
         self.assertEqual(harness["pwd"], str(self.worktree.resolve()))
         self.assertEqual(harness["branch"], self.unidad)
-        self.assertEqual(harness["tmp_mode"], 0o700)
+        if os.name == "nt":
+            # chmod() en Windows solo alterna el atributo de solo-lectura; no hay
+            # bits de permiso POSIX que fijar 0o700 pueda hacer cumplir de verdad
+            # ahí (comportamiento documentado de os.chmod en la stdlib de
+            # Windows), así que el propio ejecucion.py lo llama igual (no hace
+            # daño) pero el mode resultante no es una garantía comprobable en
+            # esta plataforma — solo se comprueba que el tmp existió y era
+            # legible/escribible por su dueño, que es lo que sí puede pedirse.
+            # Se lee `tmp_accesible` (grabado por el propio doble MIENTRAS tmp
+            # todavía existía) en vez de repetir os.access aquí: el launcher
+            # borra tmp en su `finally` antes de devolver el control a este
+            # test, así que comprobarlo ahora desde fuera siempre daría falso
+            # (bug 017 ronda 3).
+            self.assertTrue(harness["tmp_accesible"])
+        else:
+            self.assertEqual(harness["tmp_mode"], 0o700)
         self.assertTrue(all(value is None for value in harness["poison"].values()))
         self.assertIn("--safe-mode", harness["argv"])
         self.assertIn("--disable-slash-commands", harness["argv"])
         self.assertIn("--add-dir", harness["argv"])
         self.assertIn(str((self.ws / "docs/05-trabajo/001-demo").resolve()), harness["argv"])
         prompt = harness["argv"][-1]
-        self.assertIn("CONTENIDO_TECNICO_PERMITIDO", prompt)
-        self.assertNotIn("CONTENIDO_PROCESO_PROHIBIDO", prompt)
+        self.assertIn("CONTENIDO_TECNICO_PERMITIDO", prompt, self.diagnostico(harness))
+        self.assertNotIn("CONTENIDO_PROCESO_PROHIBIDO", prompt, self.diagnostico(harness))
 
     def test_codex_usa_home_efimero_y_no_descubre_plugins_instalados(self):
         resultado = self.ejecutar(harness="codex")
@@ -238,10 +313,12 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
 
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
         harness = self.registros()
-        self.assertEqual(harness["argv"][-1].splitlines()[-1], prompt)
+        self.assertEqual(harness["argv"][-1].splitlines()[-1], prompt,
+                         self.diagnostico(harness))
         self.assertNotIn("/bin/sh", harness["argv"])
         self.assertNotIn("-c", harness["argv"])
-        self.assertEqual(sum(prompt in arg for arg in harness["argv"]), 1)
+        self.assertEqual(sum(prompt in arg for arg in harness["argv"]), 1,
+                         self.diagnostico(harness))
 
     def test_rechaza_skill_de_proceso_aunque_se_solicite(self):
         resultado = self.ejecutar(skills=("using-superpowers",))
@@ -315,8 +392,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
 
         self.assertNotEqual(segundo.returncode, 0)
         self.assertIn("ocupado", segundo.stderr.lower())
-        os.write(gate, b"1")
-        os.close(gate)
+        gate.write_text("1", encoding="ascii")
         salida, error = primero.communicate(timeout=10)
         self.assertEqual(primero.returncode, 0, salida + error)
         recibos = list((self.ws / ".runtime/ejecuciones").glob("001-demo-*.json"))
@@ -333,8 +409,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
 
         self.assertNotEqual(resultado.returncode, 0)
         self.assertIn("resource:app/demo.py", resultado.stderr)
-        os.write(gate, b"1")
-        os.close(gate)
+        gate.write_text("1", encoding="ascii")
         salida, error = primero.communicate(timeout=10)
         self.assertEqual(primero.returncode, 0, salida + error)
         self.assertFalse(
@@ -381,7 +456,15 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
             cwd=self.main, env=self.env, text=True, capture_output=True,
         )
         observado_old = json.loads(old.stdout)
-        self.assertEqual(observado_old, {"cwd": str(self.main.resolve()), "target": "/mut048"})
+        # _real() (no .resolve()), para COMPARAR: en Windows el runner reporta el
+        # mismo directorio unas veces por su alias corto 8.3 (RUNNER~1, lo que
+        # devuelve os.getcwd() del proceso hijo aquí) y otras por el nombre largo
+        # (runneradmin, lo que devuelve Path.resolve()) — misma causa de la
+        # familia 3 del bug 017, aquí en el propio test.
+        self.assertEqual(
+            {"cwd": ejecucion._real(observado_old["cwd"]), "target": observado_old["target"]},
+            {"cwd": ejecucion._real(self.main), "target": "/mut048"},
+        )
 
         # NEW: el control plane corrige cwd antes de ejecutar el harness — por código,
         # sin sandbox de SO de por medio (unidad 012: esta es la garantía que se
@@ -528,13 +611,21 @@ class LanzadorHarnessClaudeDeFabricaTest(ControlPlaneE2ETest):
             "falta preparar_claude_home()",
         )
         gh_registro = Path(self.temporal.name) / "gh-setup-git.json"
-        self.hacer_ejecutable(
-            self.bin / "gh",
-            "#!/usr/bin/env python3\n"
+        cuerpo_gh = (
             "import json, os, pathlib, sys\n"
             f"pathlib.Path({str(gh_registro)!r}).write_text(json.dumps(\n"
-            "    {'argv': sys.argv[1:], 'home': os.environ.get('HOME')}))\n",
+            "    {'argv': sys.argv[1:], 'home': os.environ.get('HOME')}))\n"
         )
+        if os.name == "nt":
+            # Mismo defecto (familia 2) que crear_doble_harness: un "gh" sin
+            # extensión de PATHEXT es invisible para shutil.which() en Windows.
+            script = self.bin / "gh.py"
+            script.write_text(cuerpo_gh, encoding="utf-8")
+            (self.bin / "gh.bat").write_text(
+                f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n', encoding="utf-8"
+            )
+        else:
+            self.hacer_ejecutable(self.bin / "gh", "#!/usr/bin/env python3\n" + cuerpo_gh)
         env = {
             "HOME": str(self.home),
             "PATH": str(self.bin) + os.pathsep + os.environ.get("PATH", ""),
@@ -606,6 +697,141 @@ class RevisorEnCarrilDirectoTest(ControlPlaneE2ETest):
             "el carril directo lo construye el padre",
             resultado.stdout + resultado.stderr,
         )
+
+
+class CompatibilidadWindowsTest(unittest.TestCase):
+    """Bug 017: reproducción portátil (mock/symlink, no requiere Windows) de las tres
+    familias de fallo del CI en windows-latest. La verificación REAL de que el job
+    windows-latest queda en verde la da el CI del PR, no esta suite en macOS/Linux."""
+
+    def test_comando_subproceso_envuelve_bat_y_cmd_solo_en_windows(self):
+        # Familia 2 (parte 2): CreateProcess no sabe arrancar un .bat/.cmd sin pasar
+        # por el intérprete de comandos — sin este envoltorio, WinError 193.
+        argv = ["C:\\bin\\claude.bat", "--safe-mode"]
+        with mock.patch.object(ejecucion.os, "name", "nt"):
+            envuelto_bat = ejecucion.comando_subproceso("C:\\bin\\claude.bat", argv)
+            envuelto_cmd = ejecucion.comando_subproceso("C:\\bin\\codex.CMD", argv)
+        comspec = ejecucion.os.environ.get("ComSpec", "cmd.exe")
+        self.assertEqual(envuelto_bat, [comspec, "/c", *argv])
+        self.assertEqual(envuelto_cmd, [comspec, "/c", *argv])
+
+    def test_comando_subproceso_no_toca_nada_fuera_de_bat_cmd_o_windows(self):
+        argv = ["/usr/bin/claude", "--safe-mode"]
+        with mock.patch.object(ejecucion.os, "name", "posix"):
+            self.assertEqual(ejecucion.comando_subproceso("/usr/bin/claude", argv), argv)
+        # ni en Windows si el ejecutable ya es un .exe real, no un shim de shell.
+        with mock.patch.object(ejecucion.os, "name", "nt"):
+            self.assertEqual(
+                ejecucion.comando_subproceso("C:\\bin\\claude.exe", argv), argv
+            )
+
+    def test_comando_subproceso_con_env_indirecciona_argumentos_multilinea(self):
+        # Ronda 2 del bug 017: cmd.exe /c trocea su línea de comando en el primer
+        # salto de línea, incluso entre comillas — el prompt del harness
+        # (encargo(), siempre multilínea) llegaba truncado a la primera línea.
+        # Ronda 3: dejar que el propio cmd.exe resolviera %IR_CMDARG_N% NO basta
+        # — su sustitución trocea igual en el salto de línea y además parte el
+        # resto en palabras sueltas por los espacios sin comillas.
+        # Ronda 4: escribir ``%%IR_CMDARG_N%%`` TAMPOCO basta. El colapso
+        # ``%%`` → ``%`` sin resolver es la regla de los ficheros .bat; en la
+        # línea de comando de ``cmd /c`` el parser deja literal el primer ``%``
+        # (no abre un nombre válido) y expande el ``%IR_CMDARG_N%`` que viene
+        # justo detrás, devolviendo el valor multilínea a la línea de comando.
+        # La referencia que cruza intacta es la que no tiene NINGÚN ``%``:
+        # ``##IR_CMDARG_N##`` — es quien recibe ese token quien debe leer la
+        # variable de su propio entorno heredado para reconstruir el argumento
+        # efectivo.
+        argv = ["C:\\bin\\claude.bat", "--safe-mode", "UNIDAD: 001\nROL: x", "sin-saltos"]
+        env = {"YA_HABIA": "1"}
+        with mock.patch.object(ejecucion.os, "name", "nt"):
+            envuelto = ejecucion.comando_subproceso("C:\\bin\\claude.bat", argv, env)
+        comspec = ejecucion.os.environ.get("ComSpec", "cmd.exe")
+        self.assertEqual(
+            envuelto,
+            [comspec, "/c", "C:\\bin\\claude.bat", "--safe-mode", "##IR_CMDARG_1##", "sin-saltos"],
+        )
+        self.assertEqual(env["IR_CMDARG_1"], "UNIDAD: 001\nROL: x")
+        self.assertNotIn("IR_CMDARG_2", env, "el argumento sin salto de línea no se toca")
+        self.assertEqual(env["YA_HABIA"], "1", "no se pisa el resto del entorno del llamante")
+
+    def test_la_referencia_en_la_linea_de_comando_no_lleva_metacaracteres_de_cmd(self):
+        # Invariante que las rondas 2 y 3 violaron y que costó dos runs rojos: el
+        # token que cruza cmd.exe no puede contener NADA que cmd.exe interprete.
+        # Un '%' basta para que la línea de comando vuelva a expandir el valor
+        # multilínea y se trunque en el primer salto de línea.
+        argv = ["C:\\bin\\claude.bat", "-p", "linea1\nlinea2"]
+        env = {}
+        with mock.patch.object(ejecucion.os, "name", "nt"):
+            envuelto = ejecucion.comando_subproceso("C:\\bin\\claude.bat", argv, env)
+        referencia = envuelto[-1]
+        self.assertNotIn(referencia, env.values(), "el valor no puede viajar en la línea")
+        for metacaracter in '%&|<>^()" \t\r\n':
+            self.assertNotIn(
+                metacaracter, referencia,
+                f"la referencia {referencia!r} lleva un metacarácter de cmd.exe",
+            )
+        self.assertEqual(env["IR_CMDARG_1"], "linea1\nlinea2")
+
+    def test_doble_harness_en_windows_es_encontrable_por_pathext_y_delega_en_python(self):
+        # Familia 2 (parte 1): shutil.which() en Windows solo ve extensiones de
+        # PATHEXT; el doble de prueba sin extensión ("no encuentro el ejecutable
+        # claude/codex" en el CI) necesita un .bat que delegue en el .py real.
+        tmp = Path(tempfile.mkdtemp(prefix="doble-win-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        caso = ControlPlaneE2ETest.__new__(ControlPlaneE2ETest)
+        caso.bin = tmp
+        with mock.patch.object(os, "name", "nt"):
+            caso.crear_doble_harness("claude")
+        bat, script = tmp / "claude.bat", tmp / "claude.py"
+        self.assertTrue(bat.is_file())
+        self.assertTrue(script.is_file())
+        self.assertIn(sys.executable, bat.read_text())
+        self.assertIn(str(script), bat.read_text())
+        self.assertIn(".harness-record.json", script.read_text())
+
+    def test_real_normaliza_un_alias_de_ruta_al_mismo_destino(self):
+        # Familia 3: análogo portable del alias corto (RUNNER~1) contra el largo
+        # (runneradmin) de Windows — dos cadenas de ruta DISTINTAS que apuntan al
+        # MISMO directorio (aquí, vía symlink) deben comparar igual tras _real().
+        base = Path(tempfile.mkdtemp(prefix="real-alias-"))
+        self.addCleanup(shutil.rmtree, base, True)
+        real_dir = base / "runneradmin"
+        real_dir.mkdir()
+        alias = base / "RUNNER~1"
+        # En Windows de verdad, NTFS ya genera "RUNNER~1" como alias 8.3
+        # automático de "runneradmin" (>8 caracteres) en cuanto se crea el
+        # directorio — crear el symlink a mano falla con WinError 183 (ya
+        # existe) porque el alias ya está ahí sin que nadie lo pida; en ese
+        # caso el propio SO nos regala el segundo nombre que el test necesita.
+        if not alias.exists():
+            alias.symlink_to(real_dir)
+        self.assertNotEqual(str(alias), str(real_dir), "el test no aísla nada si ya son iguales")
+        self.assertEqual(ejecucion._real(alias), ejecucion._real(real_dir))
+
+    def test_inventario_worktrees_reconoce_el_worktree_pese_al_alias_de_ruta(self):
+        # Sin _real(), un lookup de diccionario por Path/cadena exacta falla ante dos
+        # representaciones del mismo directorio — es justo lo que reportó el CI
+        # («... no figura en git worktree list») cuando git y Python difieren en cómo
+        # escriben la MISMA ruta.
+        base = Path(tempfile.mkdtemp(prefix="inventario-alias-"))
+        self.addCleanup(shutil.rmtree, base, True)
+        (base / "runneradmin").mkdir()
+        alias = base / "RUNNER~1"
+        # Ver el comentario equivalente en test_real_normaliza_...: en Windows
+        # de verdad NTFS ya se adelanta y crea este alias 8.3 solo.
+        if not alias.exists():
+            alias.symlink_to(base / "runneradmin")
+        destino_via_alias = alias / "worktrees" / "001-demo"
+        destino_via_alias.parent.mkdir()
+        destino_via_alias.mkdir()
+        destino_via_python = base / "runneradmin" / "worktrees" / "001-demo"
+
+        inventario = {ejecucion._real(destino_via_alias): {"branch": "refs/heads/001-demo"}}
+        self.assertIn(ejecucion._real(destino_via_python), inventario)
+        # El defecto real (antes del arreglo): sin pasar por _real(), la clave cruda
+        # que habría guardado el lookup por Path era la del alias, y no coincidía
+        # textualmente con la ruta que reporta Python del otro lado.
+        self.assertNotEqual(str(destino_via_alias), str(destino_via_python))
 
 
 if __name__ == "__main__":

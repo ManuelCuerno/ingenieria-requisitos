@@ -107,7 +107,7 @@ class PeticionUnidadTest(unittest.TestCase):
         )
         return proceso, ready, gate
 
-    def esperar_barrera(self, ready, timeout=2):
+    def esperar_barrera(self, ready, timeout=40):
         limite = time.monotonic() + timeout
         while time.monotonic() < limite:
             if ready.exists():
