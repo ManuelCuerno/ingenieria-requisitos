@@ -455,5 +455,101 @@ class VersionMetodoTest(unittest.TestCase):
         self.assertNotIn("__pycache__", estado)
 
 
+class RamaFusionadaDelLinterTest(unittest.TestCase):
+    """Bug 022: rama_fusionada de lint_metodo.py es una copia del testigo de
+    peticion.py y quedó atrás del arreglo del bug 021 — FAIL falso sobre un
+    exprés squash-mergeado de verdad con la rama borrada y el P-ID (no el
+    nombre exacto) en el asunto. Mismo contrato que el 021, sin relajar la
+    anti-fabricación. El linter es un guion: se prueba como subprocess."""
+
+    LINT = RAIZ / "plantilla/docs/00-metodo/scripts/lint_metodo.py"
+    PID = "P-20260815-032bc9b1"
+    RAMA = "expres-P-20260815-032bc9b1-gitignore-ci-visor-contratos"
+    DENUNCIA = "exprés terminal sin cambio fusionado"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="lint-testigo-")
+        self.addCleanup(self.tmp.cleanup)
+        self.raiz = Path(self.tmp.name)
+        (self.raiz / "docs/05-trabajo/peticiones" / self.PID).mkdir(parents=True)
+        self.repo = self.raiz / "main"
+        self.repo.mkdir()
+        self.git("init", "-b", "main")
+        self.git("config", "user.name", "Test")
+        self.git("config", "user.email", "test@example.com")
+        (self.repo / "a.txt").write_text("base\n", encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-m", "base")
+        self.base = self.git("rev-parse", "HEAD")
+
+    def git(self, *args):
+        return subprocess.run(
+            ["git", *args], cwd=self.repo, check=True, text=True, capture_output=True
+        ).stdout.strip()
+
+    def squash_en_main(self, asunto):
+        (self.repo / "a.txt").write_text("cambio\n", encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-m", asunto)
+
+    def peticion_terminal(self, base_sha):
+        ruta = self.raiz / "docs/05-trabajo/peticiones" / self.PID / "peticion.json"
+        ruta.write_text(json.dumps({
+            "formato": 1, "id": self.PID, "estado": "cerrada", "revision": 1,
+            "resultado": "entregada",
+            "original": {"autor": "Test", "resumen": "x", "texto": "x"},
+            "aclaraciones": [], "evaluaciones": [], "reclamos": [], "relaciones": [],
+            "cierres": [], "responsable": None,
+            "creada": "2026-08-15T00:00:00+00:00",
+            "actualizada": "2026-08-18T00:00:00+00:00",
+            "procesos": [{
+                "tipo": "expres", "ref": self.RAMA, "relacion": "satisface",
+                "estado": "terminal", "revision": 1,
+                "fecha": "2026-08-15T00:00:00+00:00",
+                "contrato_terminal": "rama-expres-v1",
+                "metadata": {"base_sha": base_sha, "principal": "main"},
+            }],
+        }, ensure_ascii=False), encoding="utf-8")
+
+    def lint(self):
+        return subprocess.run(
+            [sys.executable, str(self.LINT), "--raiz", str(self.raiz)],
+            text=True, encoding="utf-8", errors="replace", capture_output=True,
+        )
+
+    def test_squash_real_sin_rama_viva_no_es_fail(self):
+        self.squash_en_main("expres P-20260815-032bc9b1: desbloquea visor_contratos/ (#16)")
+        self.peticion_terminal(self.base)
+
+        salida = self.lint()
+        texto = salida.stdout + salida.stderr
+
+        self.assertNotIn(self.DENUNCIA, texto,
+                         "el linter debe reconocer el mismo testigo que peticion.py (021/022)")
+
+    def test_sin_p_id_ni_nombre_en_el_asunto_sigue_siendo_fail(self):
+        self.squash_en_main("commit cualquiera sin rastro de la peticion")
+        self.peticion_terminal(self.base)
+
+        texto = self.lint().stdout
+
+        self.assertIn(self.DENUNCIA, texto, "sin testigo el FAIL debe seguir: no se relaja")
+
+    def test_base_fuera_de_la_principal_sigue_siendo_fail(self):
+        subprocess.run(["git", "checkout", "--orphan", "huerfana"],
+                       cwd=self.repo, check=True, capture_output=True)
+        (self.repo / "b.txt").write_text("otra\n", encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-m", "raiz ajena")
+        base_ajena = self.git("rev-parse", "HEAD")
+        self.git("checkout", "main")
+        self.squash_en_main("expres P-20260815-032bc9b1: lo que sea (#16)")
+        self.peticion_terminal(base_ajena)
+
+        texto = self.lint().stdout
+
+        self.assertIn(self.DENUNCIA, texto)
+
+
 if __name__ == "__main__":
     unittest.main()

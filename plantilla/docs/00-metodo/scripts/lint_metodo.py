@@ -249,8 +249,11 @@ def rama_fusionada(repo, rama, principal, metadata):
         return False
     codigo, punta = git(repo, "rev-parse", "--verify", "--quiet", f"{rama}^{{commit}}")
     punta = punta.strip() if codigo == 0 else metadata.get("tip_sha", "")
-    if not base_sha or not punta or punta == base_sha:
+    if punta == base_sha:
         return False
+    # Sin punta (rama borrada tras el merge y sin tip_sha guardado) los caminos
+    # por ancestría no existen, pero el grep del squash de más abajo sigue
+    # valiendo: el asunto del merge es el testigo (bugs 021/022).
     punta_existe = git(
         repo, "rev-parse", "--verify", "--quiet", f"{punta}^{{commit}}"
     )[0] == 0
@@ -264,17 +267,28 @@ def rama_fusionada(repo, rama, principal, metadata):
         codigo, asunto = git(repo, "show", "-s", "--format=%s", merge_guardado)
         if modo_guardado == "squash" and codigo == 0 and rama in asunto:
             return True
-    if not punta_existe or git(
-        repo, "merge-base", "--is-ancestor", base_sha, punta
-    )[0] != 0:
-        return False
-    if git(repo, "merge-base", "--is-ancestor", punta, principal)[0] == 0:
-        return True
-    codigo, salida = git(
-        repo, "log", principal, f"^{base_sha}", "--fixed-strings", f"--grep={rama}",
-        "--format=%H", "-1",
-    )
-    return codigo == 0 and bool(salida.strip())
+    if punta:
+        if not punta_existe or git(
+            repo, "merge-base", "--is-ancestor", base_sha, punta
+        )[0] != 0:
+            return False
+        if git(repo, "merge-base", "--is-ancestor", punta, principal)[0] == 0:
+            return True
+    # Grep del squash: primero el nombre exacto de la rama; si el título del PR
+    # no lo conservó, vale el P-ID que el nombre de una rama exprés siempre
+    # contiene. Sin ninguno de los dos en el asunto NO hay testigo (021/022).
+    patrones = [rama]
+    p_id = re.search(r"P-\d{8}-[0-9a-f]{8}", rama)
+    if p_id:
+        patrones.append(p_id.group(0))
+    for patron in patrones:
+        codigo, salida = git(
+            repo, "log", principal, f"^{base_sha}", "--fixed-strings",
+            f"--grep={patron}", "--format=%H", "-1",
+        )
+        if codigo == 0 and salida.strip():
+            return True
+    return False
 
 
 def fecha_iso_valida(valor):
