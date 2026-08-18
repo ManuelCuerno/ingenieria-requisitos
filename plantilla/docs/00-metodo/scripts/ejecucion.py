@@ -441,8 +441,8 @@ def argv_harness(harness, ejecutable, rol, worktree, texto, documentos=(), lectu
         str(worktree),
         "-s",
         "workspace-write",
-        "-a",
-        "never",
+        # Sin "-a": codex-cli 0.146.0 lo retiró y muere con `unexpected argument`;
+        # en modo `exec` no hay aprobaciones interactivas por definición (bug 025).
     ]
     for directorio in directorios:
         argv.extend(("--add-dir", directorio))

@@ -291,6 +291,19 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("CONTENIDO_TECNICO_PERMITIDO", prompt, self.diagnostico(harness))
         self.assertNotIn("CONTENIDO_PROCESO_PROHIBIDO", prompt, self.diagnostico(harness))
 
+    def test_codex_no_recibe_el_flag_de_aprobacion_retirado(self):
+        # Bug 025: codex-cli 0.146.0 retiró `-a` y muere con `unexpected argument`
+        # antes del prompt. En modo `exec` no hay aprobaciones interactivas por
+        # definición, así que el flag sobra: no debe aparecer en el argv.
+        resultado = self.ejecutar(harness="codex")
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        harness = self.registros()
+        self.assertNotIn("-a", harness["argv_crudo"])
+        self.assertNotIn("never", harness["argv_crudo"])
+        # El sandbox del propio codex sigue declarado:
+        self.assertIn("workspace-write", harness["argv"])
+
     def test_codex_usa_home_efimero_y_no_descubre_plugins_instalados(self):
         resultado = self.ejecutar(harness="codex")
 
