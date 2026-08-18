@@ -46,6 +46,12 @@ REQUERIDOS = (
     ".github/workflows/quality-security.yml",
     ".github/dependabot.yml",
 )
+WORKFLOWS_METODO = (
+    ".github/workflows/tests.yml",
+    ".github/workflows/quality-security.yml",
+    ".github/dependabot.yml",
+)
+MARCADOR_DEUDA = "DEUDA-CI: contrato sin materializar"
 RE_PLACEHOLDER = re.compile(r"<[^<>\n]{2,}>")
 RE_ACTION = re.compile(r"\buses:\s*([^\s#]+)")
 RE_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -564,12 +570,53 @@ def revisar_control_plane(repo, required=False, trusted_allow_hosts=()):
     return []
 
 
+def contrato_ci_materializado(repo):
+    """¿El repo empezó a construir su contrato de CI, aunque sea a medias?
+
+    Ausente (ni `scripts/ci/` ni ningún workflow del método) es un proyecto que nunca tuvo
+    el esqueleto: eso es deuda declarable, no una rotura. Cualquier rastro de haber
+    empezado (el directorio existe, o algún workflow existe) ya es "parcial": ahí sí falta
+    una pieza concreta, y eso es un FAIL como siempre.
+    """
+    if (repo / "scripts/ci").is_dir():
+        return True
+    return any((repo / relativa).is_file() for relativa in WORKFLOWS_METODO)
+
+
+RE_COMANDO_EN_LINEA = re.compile(r"`([^`\n]+)`")
+
+
+def checks_declarados_en_agents(repo):
+    """Comandos entre backticks en las líneas de AGENTS.md que hablan de test/lint/
+    seguridad/CI — el checklist real que este repo sí usa, en vez de su ausencia."""
+    texto = leer(repo, "AGENTS.md")
+    if not texto.strip():
+        return None
+    palabras = re.compile(r"\b(test|lint|ci|seguridad|security|check|build)\b", re.I)
+    comandos = []
+    for linea in texto.splitlines():
+        if palabras.search(linea):
+            comandos += RE_COMANDO_EN_LINEA.findall(linea)
+    return "; ".join(dict.fromkeys(comandos)) if comandos else None
+
+
 def revisar(repo, require_e2e=False, require_control_plane=False,
             control_plane_allow_hosts=()):
     if not repo.is_dir():
         return [f"el repo no existe o no es una carpeta: {repo}"]
     if not repo_tiene_codigo(repo):
         print("  OK   repositorio todavía vacío: el CI real nacerá cuando se conozca el stack")
+        return []
+    if (not require_e2e and not require_control_plane
+            and not contrato_ci_materializado(repo)):
+        # R6: las puertas explícitas siempre exigen su pieza; sin ellas, un contrato
+        # completamente ausente es deuda nombrada (R1/R5), no un FAIL eterno.
+        checks = checks_declarados_en_agents(repo)
+        detalle = (f"los checks reales son: {checks}" if checks
+                   else "su AGENTS.md tampoco declara checks alternativos: decláralos ahí")
+        print(f"  WARN {MARCADOR_DEUDA}: este repo no tiene el contrato de CI del método "
+              f"(sin scripts/ci/ ni workflows); {detalle}. Para materializarlo: abre una "
+              "unidad que siga plantillas/agents-repo-codigo.md y runbooks/planificacion.md")
         return []
     requeridos = REQUERIDOS + (("scripts/ci/e2e", "scripts/ci/provision-e2e")
                               if require_e2e else ())
@@ -621,7 +668,12 @@ def main():
     )
     for fallo in fallos:
         print(f"  FAIL {fallo}")
-    if not fallos and repo_tiene_codigo(repo):
+    # El bloque "todo materializado" solo aplica si de verdad se comprobó el contrato
+    # completo: si se degradó a WARN de deuda (contrato ausente), ese WARN ya lo dijo todo,
+    # y repetir un OK aquí contradiría el propio aviso.
+    if (not fallos and repo_tiene_codigo(repo)
+            and (args.require_e2e or args.require_control_plane
+                 or contrato_ci_materializado(repo))):
         print("  OK   tests, lint, seguridad y actualizaciones están materializados")
     print(f"\n{len(fallos)} FAIL")
     return 1 if fallos else 0

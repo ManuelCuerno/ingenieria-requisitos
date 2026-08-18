@@ -1119,13 +1119,17 @@ else:
         opciones_ci,
         capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
     )
+    # lint_ci.py degrada el contrato-ausente a WARN con exit 0 (029): ese caso deja de
+    # tener un returncode≠0 que delatarlo, y se reconoce por el marcador `DEUDA-CI:` que
+    # imprime en su lugar. returncode≠0 sigue significando FAIL real (contrato parcial).
+    deuda_sin_materializar = "DEUDA-CI:" in resultado_ci.stdout
     if (presentes_ci or requiere_e2e) and resultado_ci.returncode:
         warn("la materialización del CI está incompleta; ejecuta "
              "`python3 docs/00-metodo/scripts/lint_ci.py --repo main"
              f"{' --require-e2e' if requiere_e2e else ''}` para ver el detalle")
     elif presentes_ci:
         ok("contrato CI materializado y completo")
-    elif resultado_ci.returncode:
+    elif resultado_ci.returncode or deuda_sin_materializar:
         warn("CI real aún sin materializar: en brownfield debe ser la primera unidad técnica "
              "tras la adopción; en proyectos nuevos nace con el esqueleto")
     else:

@@ -375,11 +375,13 @@ class ContratoCITest(unittest.TestCase):
         self.assertIn("repositorio todavía vacío", resultado.stdout)
 
     def test_lint_ci_rechaza_codigo_real_sin_controles(self):
+        # 029: contrato COMPLETAMENTE ausente (ni scripts/ci/ ni workflows) deja de ser
+        # FAIL eterno — es deuda declarada con WARN, exit 0 (R1). Un contrato PARCIAL
+        # sigue siendo FAIL (R2, cubierto en test_lint_ci_deploy.py).
         repo = self.crear_repo(codigo=True)
         resultado = self.ejecutar_lint_ci(repo)
-        self.assertEqual(resultado.returncode, 1)
-        self.assertIn("scripts/ci/full-suite", resultado.stdout)
-        self.assertIn("quality-security.yml", resultado.stdout)
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertIn("DEUDA-CI", resultado.stdout)
 
     def test_lint_ci_acepta_contrato_completo(self):
         repo = self.crear_repo(codigo=True)
