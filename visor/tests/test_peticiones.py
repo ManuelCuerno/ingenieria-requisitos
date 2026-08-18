@@ -1348,6 +1348,248 @@ else:
             datos["historial_aparcados"][-1]["motivo"], "esperar al proveedor"
         )
 
+    # --------------------------------------------------------- unidad 027: ruta/tipo (R5/R6)
+
+    def evaluar_con(self, pid, ruta, tipo=None, investigacion="ninguna",
+                     motivo="contraste suficiente para encaminar"):
+        args = [
+            "evaluar", pid, "--ruta", ruta,
+        ]
+        if tipo:
+            args += ["--tipo", tipo]
+        args += [
+            "--investigacion", investigacion,
+            "--motivo", motivo,
+            "--flujo", "REC-1",
+            "--huella-flujo", "planos-v1",
+            "--sha", self.sha,
+            "--ruta-codigo", "app/terminal.py",
+            "--conocimiento", "docs/decisiones/004-paleta.md",
+        ]
+        return self.ejecutar(*args)
+
+    def test_ruta_banana_falla_en_la_evaluacion_con_vocabulario(self):
+        pid = self.capturar()
+
+        resultado = self.evaluar_con(pid, "banana")
+
+        self.assertEqual(resultado.returncode, 1)
+        self.assertIn("vocabulario", resultado.stderr.lower())
+        self.assertEqual(self.datos(pid)["evaluaciones"], [])
+
+    def test_ruta_banana_con_tipo_falla_contra_el_vocabulario_de_carriles(self):
+        pid = self.capturar()
+
+        resultado = self.evaluar_con(pid, "banana", tipo="bug")
+
+        self.assertEqual(resultado.returncode, 1)
+        self.assertIn("carriles", resultado.stderr.lower())
+
+    def test_par_carril_directo_y_tipo_bug_permite_nueva_bug_directo_sin_reevaluar(self):
+        """El caso 1 de "Cómo lo pruebas tú": una sola evaluación, sin el baile evaluar↔nueva
+        (unidad 027, R5)."""
+        pid = self.capturar("Arreglar el launcher")
+
+        evaluada = self.evaluar_con(pid, "directo", tipo="bug")
+
+        self.assertEqual(evaluada.returncode, 0, evaluada.stderr)
+        self.assertEqual(evaluada.stderr, "")
+        datos = self.datos(pid)
+        self.assertEqual(datos["evaluaciones"][-1]["carril_provisional"], "directo")
+        self.assertEqual(datos["evaluaciones"][-1]["tipo_provisional"], "bug")
+        # nueva/despachar validan el PAR sin reevaluar: se comprueba a nivel de puerta,
+        # que es lo mismo que mira unidad.py.
+        revision = self.ejecutar(
+            "comprobar-revision", pid, "--revision", str(datos["revision"])
+        )
+        self.assertEqual(revision.returncode, 0, revision.stderr)
+
+    def test_ruta_antigua_bug_sigue_funcionando_con_aviso_de_la_forma_nueva(self):
+        """Compatibilidad retro (R5): --ruta bug sin --tipo sigue evaluando, con aviso."""
+        pid = self.capturar("Bug legacy")
+
+        resultado = self.evaluar_con(pid, "bug")
+
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        self.assertIn("AVISO", resultado.stderr)
+        self.assertIn("--ruta", resultado.stderr)
+        datos = self.datos(pid)
+        self.assertEqual(datos["evaluaciones"][-1]["carril_provisional"], "normal")
+        self.assertEqual(datos["evaluaciones"][-1]["tipo_provisional"], "bug")
+
+    def test_ruta_y_tipo_antiguos_incoherentes_no_se_cuelan(self):
+        pid = self.capturar()
+
+        resultado = self.evaluar_con(pid, "bug", tipo="feature")
+
+        self.assertEqual(resultado.returncode, 1)
+        self.assertIn("carriles", resultado.stderr.lower())
+
+    # ------------------------------------------------------- unidad 027: desenlazar (R4/R7)
+
+    def test_desenlazar_exige_motivo(self):
+        pid = self.capturar()
+        self.evaluar_ninguna(pid)
+        self.unidad("001-una-unidad", peticiones=pid)
+        self.ejecutar("enlazar", pid, "--tipo", "unidad", "--ref", "001-una-unidad")
+
+        resultado = self.ejecutar(
+            "desenlazar", pid, "--tipo", "unidad", "--ref", "001-una-unidad",
+            "--autor", "Nate",
+        )
+
+        self.assertEqual(resultado.returncode, 2)  # argparse: --motivo es obligatorio
+
+    def test_desenlazar_el_enlace_vigente_se_rechaza(self):
+        pid = self.capturar()
+        self.evaluar_ninguna(pid)
+        self.unidad("001-vigente", peticiones=pid)
+        enlazada = self.ejecutar("enlazar", pid, "--tipo", "unidad", "--ref", "001-vigente")
+        self.assertEqual(enlazada.returncode, 0, enlazada.stderr)
+
+        resultado = self.ejecutar(
+            "desenlazar", pid, "--tipo", "unidad", "--ref", "001-vigente",
+            "--motivo", "me equivoqué de unidad", "--autor", "Nate",
+        )
+
+        self.assertEqual(resultado.returncode, 1)
+        self.assertIn("sustituida", resultado.stderr.lower())
+        procesos = self.datos(pid)["procesos"]
+        self.assertEqual(procesos[0]["estado"], "pendiente")
+
+    def test_desenlazar_una_revision_sustituida_cancela_con_rastro(self):
+        pid = self.capturar("Desplegar")
+        evaluada = self.evaluar_con(pid, "deploy")
+        self.assertEqual(evaluada.returncode, 0, evaluada.stderr)
+        ficha = self.ws / "docs/05-trabajo/001-release/despliegue.md"
+        ficha.parent.mkdir(parents=True)
+        ficha.write_text(
+            "---\nproceso: deploy\nestado: preparada\n"
+            f"peticiones: [{pid}@1]\n---\n\n# Deploy\n",
+            encoding="utf-8",
+        )
+        enlazada = self.ejecutar(
+            "enlazar", pid, "--tipo", "deploy", "--ref",
+            "docs/05-trabajo/001-release/despliegue.md",
+        )
+        self.assertEqual(enlazada.returncode, 0, enlazada.stderr)
+        aclarada = self.ejecutar(
+            "aclarar", pid, "--texto", "Cambia el destino del despliegue", "--autor", "Nate"
+        )
+        self.assertEqual(aclarada.returncode, 0, aclarada.stderr)
+        reevaluada = self.evaluar_con(pid, "deploy")
+        self.assertEqual(reevaluada.returncode, 0, reevaluada.stderr)
+        ficha.write_text(
+            "---\nproceso: deploy\nestado: preparada\n"
+            f"peticiones: [{pid}@1]\n---\n\n# Deploy\n",
+            encoding="utf-8",
+        )
+
+        reencuadrada = self.ejecutar(
+            "reencuadrar-orden", pid, "--desde-revision", "1", "--tipo", "deploy",
+            "--ref", "docs/05-trabajo/001-release/despliegue.md",
+        )
+        self.assertEqual(reencuadrada.returncode, 0, reencuadrada.stderr)
+
+        resultado = self.ejecutar(
+            "desenlazar", pid, "--tipo", "deploy",
+            "--ref", "docs/05-trabajo/001-release/despliegue.md",
+            "--motivo", "la revisión 1 quedó sustituida por la aclaración", "--autor", "Nate",
+        )
+
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+        sustituido = next(
+            p for p in self.datos(pid)["procesos"]
+            if p["revision"] == 1 and p["tipo"] == "deploy"
+        )
+        self.assertEqual(sustituido["estado"], "cancelado")
+        self.assertEqual(
+            sustituido["motivo_cancelacion"], "la revisión 1 quedó sustituida por la aclaración"
+        )
+        self.assertEqual(sustituido["autor_cancelacion"], "Nate")
+        self.assertIn("actualizado", sustituido)
+
+    # ------------------------------------------------- unidad 027: ficha de despliegue LOTE (R3)
+
+    def test_ficha_de_despliegue_de_lote_reconcilia_y_cierra_las_tres_unidades(self):
+        pids = [self.capturar(f"Desplegar unidad {i}") for i in range(3)]
+        ficha = self.ws / "docs/05-trabajo/despliegues/release-42.md"
+        ficha.parent.mkdir(parents=True)
+        cuerpo_evidencia = (
+            "\n\n# Despliegue verificado\n\n> `<HARD-GATE>` sin secretos.\n\n"
+            "- **Commit/tag:** " + self.sha + " · ya en main\n"
+            "- **Etapa destino y máquina exacta:** 2 VPS — producción\n"
+            "- **Qué cambia para el usuario, en una frase:** lote de 3 unidades\n"
+            "- **OK del usuario ANTES de salir:** OK (2026-08-04, Nate)\n"
+            "- **Suite completa sobre este commit:** VERDE · .runtime/pre-deploy/full-suite.log\n"
+            "- **Seguridad sobre este commit:** VERDE · .runtime/pre-deploy/security.log\n"
+            "- **Qué se copió y adónde:** base y ficheros a backup externo\n"
+            "- **Volcado — comando y salida:** backup-db terminó correctamente\n"
+            "- **Restauración de prueba:** restaurada en staging; consultas verificadas\n"
+            "1. **Pasos**: actualizar servicio y reiniciar worker\n"
+            "2. **Vuelta atrás:** restaurar backup y volver al commit anterior\n"
+            "- **Flujo real de negocio de punta a punta:** alta completa — captura 42\n"
+            "- **Vigilancia:** monitor verde y error inocuo registrado — evento 84\n"
+            "- **Validación del usuario sobre la etapa desplegada:** OK (2026-08-04)\n"
+            "- **Resultado:** DESPLEGADO → sin incidencias\n"
+            "- **Quién y cuándo:** Nate — 2026-08-04 12:30\n"
+            "- **Anotado en `conocimiento/plano-deploy.md`:** lote 42 corre " + self.sha + "\n"
+        )
+        referencias = ", ".join(f"{pid}@1" for pid in pids)
+        ficha.write_text(
+            "---\nproceso: deploy\nestado: desplegado\n"
+            f"peticiones: [{referencias}]\n"
+            "unidades: [017-uno, 018-dos, 019-tres]\n"
+            f"etapa: 2-vps\ncommit: {self.sha}\nfecha: 2026-08-04\n---"
+            + cuerpo_evidencia,
+            encoding="utf-8",
+        )
+        for pid in pids:
+            evaluada = self.evaluar_con(pid, "deploy")
+            self.assertEqual(evaluada.returncode, 0, evaluada.stderr)
+            enlazada = self.ejecutar(
+                "enlazar", pid, "--tipo", "deploy", "--ref",
+                "docs/05-trabajo/despliegues/release-42.md",
+            )
+            self.assertEqual(enlazada.returncode, 0, enlazada.stderr)
+
+        for pid in pids:
+            resultado = self.ejecutar(
+                "reconciliar", pid, "--revision", "1", "--tipo", "deploy",
+                "--ref", "docs/05-trabajo/despliegues/release-42.md",
+                "--evidencia", "lote 42 verificado en VPS",
+            )
+            self.assertEqual(resultado.returncode, 0, resultado.stderr)
+            self.assertEqual(self.datos(pid)["estado"], "cerrada")
+
+    def test_ficha_de_despliegue_de_lote_con_una_sola_unidad_no_cuela(self):
+        pid = self.capturar("Desplegar")
+        evaluada = self.evaluar_con(pid, "deploy")
+        self.assertEqual(evaluada.returncode, 0, evaluada.stderr)
+        ficha = self.ws / "docs/05-trabajo/despliegues/release-43.md"
+        ficha.parent.mkdir(parents=True)
+        ficha.write_text(
+            "---\nproceso: deploy\nestado: desplegado\n"
+            f"peticiones: [{pid}@1]\nunidades: [017-uno]\n"
+            f"etapa: 2-vps\ncommit: {self.sha}\nfecha: 2026-08-04\n---\n\n"
+            "# Despliegue de una sola unidad disfrazado de lote\n",
+            encoding="utf-8",
+        )
+        enlazada = self.ejecutar(
+            "enlazar", pid, "--tipo", "deploy", "--ref",
+            "docs/05-trabajo/despliegues/release-43.md",
+        )
+        self.assertEqual(enlazada.returncode, 0, enlazada.stderr)
+
+        resultado = self.ejecutar(
+            "reconciliar", pid, "--revision", "1", "--tipo", "deploy",
+            "--ref", "docs/05-trabajo/despliegues/release-43.md",
+            "--evidencia", "solo una unidad",
+        )
+
+        self.assertEqual(resultado.returncode, 1)
+        self.assertIn("al menos dos", resultado.stderr.lower())
+
 
 class EvidenciaRamaFusionadaTest(unittest.TestCase):
     """Bug 021: el testigo del squash debe reconocer un merge REAL aunque la

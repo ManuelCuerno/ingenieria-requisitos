@@ -489,9 +489,20 @@ def validar_origenes(referencias, carril, tipo):
     return resultado
 
 
-def revalidar_origenes(fm, proceso=None):
+def revalidar_origenes(fm, proceso=None, permitir_legacy=False):
+    """Valida (o revalida) las peticiones de origen de una unidad/bug.
+
+    `permitir_legacy` (unidad 027, R1/R2) solo lo activa `cerrar`: una unidad SIN
+    `peticiones:` que figure en `peticiones/LEGACY.json` se acepta con lista vacía en vez de
+    bloquear para siempre — la vía es para el pasado (anterior al sistema de peticiones), no
+    un agujero: sin listar en LEGACY.json, el bloqueo de siempre sigue igual.
+    """
     referencias = peticiones_de(fm)
     if not referencias:
+        if permitir_legacy and proceso:
+            tipo_proceso, nombre = proceso
+            if gestion_peticiones.unidad_legacy(nombre, tipo_proceso):
+                return []
         raise gestion_peticiones.ErrorPeticion(
             "la unidad no declara peticiones: [P-ID@revision]"
         )
@@ -1556,6 +1567,24 @@ def anotar_fusion(ruta, sha):
     return False
 
 
+def anotar_origen_legacy(ruta):
+    """Deja escrito en el frontmatter que esta unidad se cerró por la vía legacy (unidad 027,
+    R1): sin `peticiones:` propias, pero listada en `peticiones/LEGACY.json`. Mismo patrón que
+    `anotar_fusion`: se inserta una vez, antes del `---` de cierre."""
+    texto = leer_fichero_unidad(ruta)
+    if re.search(r"^origen:\s*\S", texto, flags=re.M):
+        return False
+    lineas = texto.splitlines()
+    if not lineas or lineas[0].strip() != "---":
+        return False
+    for i, linea in enumerate(lineas[1:], start=1):
+        if linea.strip() == "---":
+            lineas.insert(i, "origen: legacy (peticiones/LEGACY.json)")
+            escribir_fichero_unidad(ruta, "\n".join(lineas) + "\n")
+            return True
+    return False
+
+
 def escribir_ok_usuario(ruta, fecha):
     """Deja escrito el OK del usuario donde ya se lee la revisión. Sin vocabulario nuevo."""
     texto = leer_fichero_unidad(ruta)
@@ -1654,10 +1683,16 @@ def _cerrar_bajo_lease(args, nombre, autoridad):
         return 1
     try:
         tipo_proceso = "bug" if clase == "bug" else "unidad"
-        referencias_peticion = revalidar_origenes(fm, proceso=(tipo_proceso, nombre))
+        referencias_peticion = revalidar_origenes(
+            fm, proceso=(tipo_proceso, nombre), permitir_legacy=True
+        )
     except gestion_peticiones.ErrorPeticion as exc:
         fail(f"{rel(ruta)}: {exc}")
         return 1
+    origen_legacy = not referencias_peticion
+    if origen_legacy:
+        ok(f"{nombre}: sin `peticiones:` propias, pero listada en peticiones/LEGACY.json "
+           "— cierre por la vía legacy")
 
     print(f"== Cerrando {nombre} ({fm.get('tipo')}) ==\n")
     print("Puertas (lo que NO se puede saltar):")
@@ -1877,6 +1912,8 @@ def _cerrar_bajo_lease(args, nombre, autoridad):
     texto = re.sub(r"^actualizado:\s*\S+", f"actualizado: {HOY}", texto, count=1, flags=re.M)
     escribir_fichero_unidad(ruta, texto)
     ok(f"{rel(ruta)}: estado → mergeada")
+    if origen_legacy and anotar_origen_legacy(ruta):
+        ok(f"{rel(ruta)}: origen legacy anotado (peticiones/LEGACY.json)")
 
     # Para una unidad normal, `mergeada` solo es válida dentro de archivo/. Se mueve antes
     # del lint y se revierte junto con los ficheros si aparece cualquier incoherencia.
@@ -1931,14 +1968,17 @@ def _cerrar_bajo_lease(args, nombre, autoridad):
     # Esta es la última mutación semántica: el proceso canónico ya está terminal y, si algo
     # falla aquí, la petición queda abierta y el comando `peticion.py reconciliar` permite
     # reanudar sin fingir que la entrega terminó antes de tiempo.
-    try:
-        gestion_peticiones.reconciliar_ids(
-            referencias_peticion, tipo_proceso, nombre, evidencia_peticion
-        )
-    except gestion_peticiones.ErrorPeticion as exc:
-        fail(f"la unidad quedó terminal, pero falta reconciliar su petición: {exc}")
-        return 1
-    ok("peticiones de origen reconciliadas con el cierre")
+    if referencias_peticion:
+        try:
+            gestion_peticiones.reconciliar_ids(
+                referencias_peticion, tipo_proceso, nombre, evidencia_peticion
+            )
+        except gestion_peticiones.ErrorPeticion as exc:
+            fail(f"la unidad quedó terminal, pero falta reconciliar su petición: {exc}")
+            return 1
+        ok("peticiones de origen reconciliadas con el cierre")
+    else:
+        ok("origen legacy: sin petición que reconciliar (peticiones/LEGACY.json)")
 
     print("\nLo que queda es tuyo, porque es criterio y no mecánica:")
     print("    · aplicar los Deltas al mapa (docs/02-flujos/) y pasar el flujo a 'entregada'")

@@ -78,6 +78,19 @@ RESULTADOS = {
 }
 RIESGOS_BLOQUEANTES = {"seguridad", "dinero", "pii", "contrato", "perdida-datos"}
 
+# El CARRIL (unidad 027, R5): antes vivía mezclado con el tipo dentro de un único --ruta y
+# obligaba a adivinar cuál de los dos significaba cada vez (el baile evaluar↔nueva sufrido en
+# campo). Ahora --ruta es SIEMPRE uno de estos valores; el tipo viaja aparte en --tipo.
+CARRILES = {"expres", "directo", "normal", "completo", "hotfix", "documental"}
+# Vocabulario legacy de --ruta (forma antigua, sin --tipo): los tipos de unidad.py TIPOS más
+# los tipos de proceso de aquí arriba (TIPOS_PROCESO). Duplicado a propósito — peticion.py no
+# importa unidad.py (sería circular) — y NO se relee de LEGACY.json ni de ningún otro sitio: es
+# el vocabulario cerrado que ya aceptaba `--ruta` antes de esta unidad, ahora con nombre.
+TIPOS_UNIDAD_LEGACY = {
+    "bug", "feature", "refactor", "migracion", "auditoria", "investigacion", "documentacion",
+}
+RUTAS_LEGACY_VALIDAS = TIPOS_UNIDAD_LEGACY | TIPOS_PROCESO
+
 
 class ErrorPeticion(ValueError):
     pass
@@ -85,6 +98,34 @@ class ErrorPeticion(ValueError):
 
 def ahora():
     return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+
+
+def cargar_legacy():
+    """Vías legales para el pasado (unidad 027, R1/R2): unidades y bugs anteriores al sistema
+    de peticiones, listados a mano en peticiones/LEGACY.json — el mismo fichero y formato que
+    ya lee `lint_metodo.py`. Función ÚNICA para que `unidad.py` no duplique esta lectura (la
+    alternativa descartada en el diseño: deriva de copias, como pasó con el testigo del squash
+    021/022)."""
+    ruta = PETICIONES / "LEGACY.json"
+    if not ruta.exists():
+        return {"formato": 1, "modo": "estricto", "unidades": [], "bugs": [], "ramas": []}
+    try:
+        datos = json.loads(ruta.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ErrorPeticion(f"peticiones/LEGACY.json ilegible: {exc}") from exc
+    if datos.get("formato") != 1 or datos.get("modo") not in {"observacion", "estricto"}:
+        raise ErrorPeticion("peticiones/LEGACY.json exige formato 1 y modo observacion|estricto")
+    for clave in ("unidades", "bugs", "ramas"):
+        if not isinstance(datos.get(clave), list):
+            raise ErrorPeticion(f"peticiones/LEGACY.json: {clave} debe ser una lista exacta")
+    return datos
+
+
+def unidad_legacy(nombre, tipo_proceso):
+    """True si `nombre` (unidad o bug) figura en LEGACY.json bajo la lista de su clase."""
+    legacy = cargar_legacy()
+    lista = "bugs" if tipo_proceso == "bug" else "unidades"
+    return nombre in set(legacy.get(lista, []))
 
 
 def ruta_peticion(pid):
@@ -456,6 +497,19 @@ def investigacion_lista(datos, evaluacion=None):
     return True
 
 
+def ruta_efectiva_evaluacion(evaluacion):
+    """Reconstruye el valor único que ANTES vivía en 'ruta_provisional' (unidad 027, R5) a
+    partir del par (carril, tipo) que ahora se guarda por separado. El carril 'directo'
+    manda igual que antes — bypasa el tipo (incidente de campo 06-08, contexto_proceso) —
+    y si no hay tipo evaluado (formas antiguas de --ruta con un carril suelto) se cae al
+    propio carril, para no cambiar el comportamiento de ninguna llamada ya existente."""
+    carril_eval = evaluacion.get("carril_provisional", evaluacion.get("ruta_provisional"))
+    tipo_eval = evaluacion.get("tipo_provisional")
+    if carril_eval == "directo":
+        return "directo"
+    return tipo_eval if tipo_eval else carril_eval
+
+
 def validar_para_orden(pid, carril=None, tipo=None, revision=None):
     datos = cargar(pid)
     if datos["estado"] in TERMINALES:
@@ -467,7 +521,7 @@ def validar_para_orden(pid, carril=None, tipo=None, revision=None):
     evaluacion = evaluacion_vigente(datos)
     if not evaluacion:
         raise ErrorPeticion(f"{pid} no está evaluada en revisión {datos['revision']}")
-    ruta = evaluacion.get("ruta_provisional")
+    ruta = ruta_efectiva_evaluacion(evaluacion)
     ruta_esperada = "directo" if carril == "directo" else tipo
     if ruta_esperada and ruta != ruta_esperada:
         raise ErrorPeticion(
@@ -691,12 +745,14 @@ def ruta_proceso_canonico(tipo, ref):
     if tipo == "deploy":
         relativa = resuelta.relative_to(RAIZ).as_posix()
         if not re.fullmatch(
-            r"docs/(?:05-trabajo|bugs)/\d{3}-[a-z0-9][a-z0-9-]*/despliegue\.md",
+            r"docs/(?:05-trabajo|bugs)/\d{3}-[a-z0-9][a-z0-9-]*/despliegue\.md"
+            r"|docs/05-trabajo/despliegues/[a-z0-9][a-z0-9-]*\.md",
             relativa,
         ):
             raise ErrorPeticion(
                 "deploy exige la ficha canónica docs/05-trabajo/NNN-slug/despliegue.md "
-                "(o docs/bugs/NNN-slug/despliegue.md para un hotfix)"
+                "(o docs/bugs/NNN-slug/despliegue.md para un hotfix), o —si el despliegue "
+                "es de LOTE, varias unidades a la vez— docs/05-trabajo/despliegues/<slug>.md"
             )
     return resuelta
 
@@ -748,15 +804,20 @@ def contexto_proceso(tipo, ruta):
     return "normal", tipo
 
 
-def referencias_frontmatter(ruta):
+def lista_frontmatter(ruta, clave):
+    """Una lista `clave: [a, b, c]` del frontmatter, o [] si no está o está vacía."""
     encontrada = re.search(
-        r"\A---\s*\n.*?^peticiones:\s*\[(.*?)\].*?^---\s*$",
+        rf"\A---\s*\n.*?^{re.escape(clave)}:\s*\[(.*?)\].*?^---\s*$",
         ruta.read_text(encoding="utf-8"),
         re.M | re.S,
     )
     if not encontrada:
         return []
     return [item.strip() for item in encontrada.group(1).split(",") if item.strip()]
+
+
+def referencias_frontmatter(ruta):
+    return lista_frontmatter(ruta, "peticiones")
 
 
 def campos_ficha_deploy(texto):
@@ -792,10 +853,34 @@ CAMPOS_DEPLOY_OBLIGATORIOS = (
 )
 
 
+def unidades_ficha_deploy_lote(ruta):
+    """Las unidades NNN-slug que una ficha de despliegue de LOTE dice llevar (R3, unidad 027).
+
+    Solo aplica a `docs/05-trabajo/despliegues/<slug>.md`: la ficha de lote existe precisamente
+    para no mentir eligiendo UNA unidad cuando el despliegue llevó varias; exige listar al
+    menos dos, todas con forma NNN-slug.
+    """
+    unidades = lista_frontmatter(ruta, "unidades")
+    if len(unidades) < 2:
+        raise ErrorPeticion(
+            f"{ruta.relative_to(RAIZ)}: la ficha de lote exige `unidades: [NNN-slug, …]` con "
+            "al menos dos (si es una sola, usa la ficha simple del propio NNN-slug)"
+        )
+    invalidas = [u for u in unidades if not re.fullmatch(r"\d{3}-[a-z0-9][a-z0-9-]*", u)]
+    if invalidas:
+        raise ErrorPeticion(
+            f"{ruta.relative_to(RAIZ)}: unidad(es) con forma inválida en `unidades:`: "
+            + ", ".join(invalidas)
+        )
+    return unidades
+
+
 def validar_ficha_deploy_terminal(ruta):
     texto = ruta.read_text(encoding="utf-8")
     if valor_frontmatter(ruta, "proceso") != "deploy":
         raise ErrorPeticion(f"{ruta.relative_to(RAIZ)} no declara proceso: deploy")
+    if ruta.parent.name == "despliegues":
+        unidades_ficha_deploy_lote(ruta)
     if valor_frontmatter(ruta, "estado") != "desplegado":
         raise ErrorPeticion("la ficha de deploy no declara estado: desplegado")
     etapa = valor_frontmatter(ruta, "etapa")
@@ -1171,7 +1256,40 @@ def cmd_reclamar(args):
     return 0
 
 
+def resolver_ruta_tipo(ruta, tipo):
+    """Separa carril y tipo de --ruta/--tipo (unidad 027, R5/R6).
+
+    Forma nueva: --ruta es un CARRIL del vocabulario cerrado y --tipo viaja aparte.
+    Forma antigua (compatibilidad retro, sin --tipo): --ruta es el tipo/proceso de siempre;
+    el carril queda 'normal' implícito, con aviso por stderr. Cualquier otro valor —viejo o
+    nuevo— revienta EN LA EVALUACIÓN con la lista de válidos (antes se aceptaba en silencio
+    y reventaba tarde, punto 1 del lote UX P-93354696)."""
+    if tipo:
+        if ruta not in CARRILES:
+            raise ErrorPeticion(
+                f"--ruta '{ruta}' fuera del vocabulario de carriles: "
+                + ", ".join(sorted(CARRILES))
+            )
+        return ruta, tipo
+    if ruta not in CARRILES and ruta not in RUTAS_LEGACY_VALIDAS:
+        raise ErrorPeticion(
+            f"--ruta '{ruta}' fuera de vocabulario: usa un carril ("
+            + ", ".join(sorted(CARRILES))
+            + ") junto con --tipo, o -en forma antigua, sin --tipo- uno de estos: "
+            + ", ".join(sorted(RUTAS_LEGACY_VALIDAS))
+        )
+    print(
+        f"AVISO: --ruta {ruta} es la forma antigua (mezclaba carril y tipo); a partir de "
+        f"ahora usa --ruta <carril> --tipo {ruta}. Se asume carril normal.",
+        file=sys.stderr,
+    )
+    if ruta in CARRILES:
+        return ruta, None
+    return "normal", ruta
+
+
 def cmd_evaluar(args):
+    carril, tipo = resolver_ruta_tipo(args.ruta, args.tipo)
     faltan = []
     if not args.flujo:
         faltan.append("flujo")
@@ -1215,7 +1333,9 @@ def cmd_evaluar(args):
         evaluacion = {
             "revision": datos["revision"],
             "fecha": ahora(),
-            "ruta_provisional": args.ruta,
+            "ruta_provisional": carril,
+            "carril_provisional": carril,
+            "tipo_provisional": tipo,
             "flujo": {"refs": args.flujo, "huella": args.huella_flujo},
             "codigo": {"sha": args.sha, "rutas": args.ruta_codigo},
             "conocimiento": args.conocimiento,
@@ -1255,6 +1375,46 @@ def cmd_enlazar(args):
     if not creado:
         raise ErrorPeticion(f"{args.tipo} {args.ref} ya está enlazado")
     print(f"{args.peticion} enlaza {args.tipo} {args.ref}")
+    return 0
+
+
+def cmd_desenlazar(args):
+    """Cancela el enlace de una revisión SUSTITUIDA (unidad 027, R4/R7).
+
+    No borra nada: el proceso queda `cancelado`, con motivo, autor y fecha. El enlace VIGENTE
+    (o uno ya terminal) no se toca aquí — eso es lo que reconcilia o reencuadra, no lo que se
+    desenlaza; cancelar no puede ser una puerta trasera para borrar lo que sigue vivo.
+    """
+    motivo = (args.motivo or "").strip()
+    if not motivo:
+        raise ErrorPeticion("desenlazar exige --motivo: sin motivo, no hay desenlace")
+    autor = (args.autor or "").strip()
+    if not autor:
+        raise ErrorPeticion("desenlazar exige --autor")
+    with lock(args.peticion):
+        datos = cargar(args.peticion)
+        candidatos = [
+            proceso for proceso in datos["procesos"]
+            if proceso.get("tipo") == args.tipo and proceso.get("ref") == args.ref
+        ]
+        if not candidatos:
+            raise ErrorPeticion(f"{args.peticion} no enlaza {args.tipo} {args.ref}")
+        objetivo = next(
+            (proceso for proceso in candidatos if proceso.get("estado") == "sustituido"),
+            None,
+        )
+        if objetivo is None:
+            raise ErrorPeticion(
+                f"{args.peticion}: el enlace de {args.tipo} {args.ref} no es una revisión "
+                "sustituida (solo se cancelan enlaces de revisiones sustituidas por "
+                "reencuadrar-orden; lo vigente se reconcilia, no se borra)"
+            )
+        objetivo["estado"] = "cancelado"
+        objetivo["actualizado"] = ahora()
+        objetivo["motivo_cancelacion"] = motivo
+        objetivo["autor_cancelacion"] = autor
+        guardar(datos)
+    print(f"{args.peticion} · {args.tipo} {args.ref} → cancelado ({motivo})")
     return 0
 
 
@@ -1783,7 +1943,12 @@ def parser_cli():
 
     p = sub.add_parser("evaluar", help="contrasta alcance y decide investigación")
     p.add_argument("peticion")
-    p.add_argument("--ruta", required=True)
+    p.add_argument("--ruta", required=True,
+                    help="carril (expres|directo|normal|completo|hotfix|documental); en forma "
+                         "antigua, sin --tipo, un tipo/proceso (compatibilidad retro)")
+    p.add_argument("--tipo",
+                    help="tipo de la unidad (bug|feature|…) o del proceso; junto con --ruta "
+                         "como carril, evalúa el par en una sola pasada (unidad 027, R5)")
     p.add_argument("--investigacion", required=True, choices=sorted(PERFILES_INVESTIGACION))
     p.add_argument("--motivo", required=True)
     p.add_argument("--flujo", action="append", default=[])
@@ -1803,6 +1968,16 @@ def parser_cli():
     p.add_argument("--relacion", default="satisface", choices=sorted(RELACIONES_PROCESO))
     p.add_argument("--contrato-terminal")
     p.set_defaults(func=cmd_enlazar)
+
+    p = sub.add_parser(
+        "desenlazar", help="cancela el enlace de una revisión sustituida (con motivo)"
+    )
+    p.add_argument("peticion")
+    p.add_argument("--tipo", required=True, choices=sorted(TIPOS_PROCESO))
+    p.add_argument("--ref", required=True)
+    p.add_argument("--motivo", required=True)
+    p.add_argument("--autor", required=True)
+    p.set_defaults(func=cmd_desenlazar)
 
     p = sub.add_parser("comprobar-revision", help="comprueba que una orden sigue vigente")
     p.add_argument("peticion")

@@ -1059,6 +1059,139 @@ class PeticionUnidadTest(unittest.TestCase):
         self.assertEqual(datos["estado"], "cerrada")
         self.assertEqual(datos["procesos"][0]["estado"], "terminal")
 
+    # --------------------------------------------------------- unidad 027: cerrar legacy (R1/R2)
+
+    def preparar_unidad_sin_peticiones(self, slug):
+        """Crea una unidad normal (vía petición real) y luego LE BORRA `peticiones:` del
+        frontmatter, simulando una unidad anterior al sistema de peticiones. La petición real
+        queda como huella sin usar: es exactamente lo que R1/R2 tienen que poder cerrar (o
+        seguir bloqueando) sin ella."""
+        pid = self.capturar(f"Trabajo legacy {slug}")
+        self.evaluar(pid, ruta="documentacion")
+        creada = self.ejecutar(
+            self.unidad, "nueva", "documentacion", slug, "--desde", pid,
+        )
+        self.assertEqual(creada.returncode, 0, creada.stdout + creada.stderr)
+        carpeta = next((self.ws / "docs/05-trabajo").glob(f"[0-9][0-9][0-9]-{slug}"))
+        spec = carpeta / "especificacion.md"
+        texto = spec.read_text(encoding="utf-8")
+        texto = texto.replace("estado: planificada", "estado: en_revision")
+        texto = re.sub(
+            r"^peticiones:\s*\[.*\].*$", "peticiones: []", texto, count=1, flags=re.M
+        )
+        texto = texto.replace("\n---\n", "\nejecucion: documental\n---\n", 1)
+        spec.write_text(texto, encoding="utf-8")
+        hallazgos = carpeta / "hallazgos.md"
+        texto = hallazgos.read_text(encoding="utf-8")
+        texto = re.sub(r"^revisor:.*$", "revisor: agente-fresco", texto, count=1, flags=re.M)
+        texto = re.sub(r"^revisado:.*$", "revisado: 2026-08-04", texto, count=1, flags=re.M)
+        texto = texto.replace(
+            "- **Veredicto:** LIMPIO | HUECOS DE CORRECCIÓN",
+            "- **Veredicto:** LIMPIO",
+        )
+        hallazgos.write_text(texto, encoding="utf-8")
+        return carpeta.name
+
+    def escribir_legacy(self, unidades=(), bugs=(), modo="estricto"):
+        legacy = self.ws / "docs/05-trabajo/peticiones/LEGACY.json"
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        legacy.write_text(
+            json.dumps({
+                "formato": 1, "modo": modo,
+                "unidades": list(unidades), "bugs": list(bugs), "ramas": [],
+            }),
+            encoding="utf-8",
+        )
+
+    def test_cerrar_legacy_listada_cierra_citando_legacy(self):
+        nombre = self.preparar_unidad_sin_peticiones("unidad-legacy")
+        self.escribir_legacy(unidades=[nombre])
+
+        resultado = self.ejecutar(
+            self.unidad, "cerrar", nombre, "--ok-usuario", "2026-08-04",
+        )
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertIn("legacy", resultado.stdout.lower())
+        final = self.ws / "docs/05-trabajo/archivo" / nombre / "especificacion.md"
+        self.assertTrue(final.exists())
+        self.assertIn("origen: legacy", final.read_text(encoding="utf-8"))
+
+    def test_cerrar_sin_peticiones_no_listada_en_legacy_sigue_bloqueando(self):
+        nombre = self.preparar_unidad_sin_peticiones("unidad-huerfana")
+        self.escribir_legacy(unidades=["999-otra-unidad-cualquiera"])
+
+        resultado = self.ejecutar(
+            self.unidad, "cerrar", nombre, "--ok-usuario", "2026-08-04",
+        )
+
+        self.assertEqual(resultado.returncode, 1)
+        self.assertIn("no declara peticiones", resultado.stderr)
+        self.assertFalse((self.ws / "docs/05-trabajo/archivo" / nombre).exists())
+
+    def test_cerrar_sin_peticiones_sin_legacy_json_sigue_bloqueando(self):
+        nombre = self.preparar_unidad_sin_peticiones("unidad-sin-legacy")
+
+        resultado = self.ejecutar(
+            self.unidad, "cerrar", nombre, "--ok-usuario", "2026-08-04",
+        )
+
+        self.assertEqual(resultado.returncode, 1)
+        self.assertIn("no declara peticiones", resultado.stderr)
+
+    # --------------------------------------------------------- unidad 027: par ruta/tipo (R5)
+
+    def evaluar_par(self, pid, ruta, tipo, perfil="ninguna"):
+        args = [
+            "evaluar", pid, "--ruta", ruta, "--tipo", tipo,
+            "--investigacion", perfil,
+            "--motivo", "contraste suficiente para encaminar",
+            "--flujo", "REC-1", "--huella-flujo", "planos-v1",
+            "--sha", self.sha, "--ruta-codigo", "app/terminal.py",
+            "--conocimiento", "docs/decisiones/004-paleta.md",
+        ]
+        resultado = self.ejecutar(self.peticion, *args)
+        self.assertEqual(resultado.returncode, 0, resultado.stderr)
+
+    def test_par_directo_bug_evaluado_una_vez_llega_a_despachar_sin_reevaluar(self):
+        """El caso 1 de "Cómo lo pruebas tú" de la unidad 027 (R5), hasta despachar."""
+        pid = self.capturar("El launcher no arranca Codex")
+        self.evaluar_par(pid, "directo", "bug")
+
+        creada = self.ejecutar(
+            self.unidad, "nueva", "bug", "launcher-directo-par", "--directo",
+            "--desde", pid,
+        )
+        self.assertEqual(creada.returncode, 0, creada.stdout + creada.stderr)
+
+        nombre = self.preparar_bug_directo_ya_creado("launcher-directo-par")
+        despachada = self.ejecutar(self.unidad, "despachar", nombre)
+        self.assertEqual(despachada.returncode, 0, despachada.stdout + despachada.stderr)
+
+    def preparar_bug_directo_ya_creado(self, slug):
+        """Igual que `preparar_bug_aprobado`, pero sobre un bug que YA existe (creado a mano
+        por el propio test, en carril directo) en vez de crearlo con `preparar_hotfix`."""
+        ficha = next((self.ws / "docs/bugs").glob(f"[0-9][0-9][0-9]-{slug}.md"))
+        texto = ficha.read_text(encoding="utf-8")
+        texto = re.sub(
+            r"^aprobado:.*$",
+            f"aprobado: {datetime.date.today().isoformat()}",
+            texto,
+            count=1,
+            flags=re.M,
+        )
+        texto += (
+            "\n## Reporte\n\n"
+            "El usuario esperaba que el runbook del carril corto describiera el paso de "
+            "cierre tal y como lo ejecuta el script, pero el documento sigue contando el "
+            "orden antiguo y el agente que lo siguió dejó la unidad a medio cerrar. Pasa "
+            "siempre que se llega al paso seis con la sesión recién abierta. Severidad P2: "
+            "no rompe datos, pero cada sesión nueva tropieza igual. Triaje: corregir el "
+            "texto del runbook y contrastarlo con el script de cierre real.\n"
+        )
+        ficha.write_text(texto, encoding="utf-8")
+        return ficha.stem
+
     def test_cerrar_respeta_git_index_de_otra_sesion(self):
         """ADR-023: el cierre reescribe el metarrepo — si otra sesión tiene
         `git-index` (p. ej. Modo D aplicando), cerrar falla nombrando al
