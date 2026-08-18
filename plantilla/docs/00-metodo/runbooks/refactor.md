@@ -37,6 +37,13 @@ demostrada.
     rendimiento, misma carga y entorno que la medición inicial.
 11. **PR.** Commit, push y pull request `NNN-slug`; el subagente se detiene y
     el `estado: en_revision` lo escribe el padre al recibir el PR (regla 2).
+
+    **Política de publicación (`push:` de `repos.yaml`).** Con `push: agente` —el defecto— este
+    paso es el de siempre. Con `push: usuario` termina en el **commit local**: ni `git push` ni
+    `gh pr create`. La rama se queda en su worktree y el comando exacto para publicarla
+    —`git -C main push -u origin NNN-slug`— se deja escrito en `hallazgos.md` (en exprés, que
+    no lo tiene, en el aviso al usuario), para que lo ejecute él con sus propios controles
+    cuando quiera.
 12. **Cierre del padre** (`runbooks/cierre.md`). Revisor fresco compara diff, spec y tests; huecos vuelven al
     constructor. Limpio: merge, suite e2e sobre `main`, instancia real y validación del
     usuario de que nada cambió. Después se actualiza estado, se archiva y se elimina

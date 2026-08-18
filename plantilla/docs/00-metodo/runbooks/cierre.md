@@ -11,13 +11,14 @@ como entrega. La tabla de `runbooks/control-plane.md` es la autoridad.
 **Origen:** el cierre revalida `P-ID@revision` y reconcilia los procesos terminales; una
 petición con más procesos sigue abierta.
 
-## Los dos caminos (los decide el doctor, no el paso 7)
+## Los dos caminos (los deciden el doctor y `repos.yaml`, no el paso 7)
 
 El camino lo deciden DOS cosas, no una: que esta máquina tenga `gh`
 (`python3 docs/00-metodo/scripts/doctor.py`) **y que el repo de código tenga remoto en
 GitHub** (`git -C main remote -v`). Con `gh` pero sin remoto, el camino A no existe: es el
 B. **Se mira al arrancar el proyecto, no al llegar aquí**: descubrir en el paso del pull
-request que no hay GitHub es descubrirlo con el código ya terminado.
+request que no hay GitHub es descubrirlo con el código ya terminado. Y hay una tercera
+cosa que manda por encima de las otras dos: la clave `push:` de `repos.yaml` (ver abajo).
 
 | | **Camino A — con `gh`** (lo normal) | **Camino B — sin `gh`** (o sin GitHub) |
 |---|---|---|
@@ -25,11 +26,21 @@ request que no hay GitHub es descubrirlo con el código ya terminado.
 | Qué mira el revisor | el diff del PR | `git -C main diff main..NNN-slug` |
 | Dónde queda el veredicto | sección **Revisión** de `hallazgos.md` | igual: sección **Revisión** de `hallazgos.md` |
 | Quién fusiona y cómo | el padre: `gh pr merge NNN-slug` | el padre: `git -C main merge --ff-only NNN-slug` **y después `git -C main push origin main`** |
+| Cuándo NO aplica | con `push: usuario` en `repos.yaml`: nunca | con `push: usuario`: SIEMPRE este, **sin su push final** |
 
 **Camino B: el push de la rama principal NO es opcional.** Al despachar, la rama de cada
 unidad nace de `origin/<principal>`. Si el merge se queda en local, la siguiente unidad parte
 de una base vieja y su merge ya no será un fast-forward: a partir de ahí cada cierre pelea con
-git. Si el proyecto no tiene remoto, no hay nada que empujar y esto no aplica.
+git. Si el proyecto no tiene remoto, no hay nada que empujar y esto no aplica; y tiene una
+excepción nombrada, la de aquí abajo.
+
+**La excepción nombrada de `push: usuario`.** Si `repos.yaml` declara `push: usuario`, el
+camino es **SIEMPRE el B** aunque esta máquina tenga `gh` y el repo tenga remoto en GitHub: lo
+decide la clave, no el doctor. No hay PR que fusionar porque el constructor nunca lo abrió, el
+merge local `--ff-only` del paso 3 se hace igual (es trabajo local, no escribe en el remoto
+ajeno) y el `git -C main push origin main` **queda prohibido para el método**: se le imprime al
+usuario como recibo del cierre —`unidad.py cerrar` lo dice con el conteo de commits— y lo
+ejecuta él cuando quiera, con sus propios controles. El método se detiene exactamente ahí.
 
 **La excepción nombrada de `main/`.** La regla es que `main/` es de solo lectura
 (`AGENTS.md`). El camino B la rompe una vez, a propósito y con nombre: **el merge del paso 3

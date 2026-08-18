@@ -1158,6 +1158,28 @@ if hay_repo and sin_remoto(repo_cod):
     warn(f"el repo de código ({repo_cod.name}/) no tiene remoto: el código existe SOLO en "
          f"este ordenador y ningún push lo respalda")
 
+# --- 8b. Política de publicación: `push: usuario` (unidad 018) ---
+# Cuando el workspace declara que publicar es cosa de la persona, la principal local por
+# delante del remoto NO es un olvido: es el estado que el modo produce en cada cierre. Se
+# informa con el conteo y el comando (mismo patrón que el WARN de `unidad.py cerrar`), pero
+# como OK — convertirlo en WARN sería un rojo perpetuo que enseña a ignorar el linter.
+if hay_repo and not sin_remoto(repo_cod):
+    try:
+        modo_push = repo_config.modo_push(RAIZ)
+    except repo_config.RepoConfigError as exc:
+        modo_push = "agente"
+        fail(str(exc))
+    if modo_push == "usuario":
+        codigo, salida = git(repo_cod, "rev-list", "--count",
+                             f"origin/{rama_principal}..{rama_principal}")
+        pendientes = int(salida) if codigo == 0 and salida.isdigit() else 0
+        if pendientes:
+            ok(f"push: usuario — {pendientes} commit(s) de {rama_principal} sin publicar; "
+               f"el método no los empuja. Cuando quieras: "
+               f"git -C {repo_cod.name} push origin {rama_principal}")
+        else:
+            ok(f"push: usuario — {rama_principal} no tiene nada pendiente de publicar")
+
 # --- 9. Higiene ---
 if (RAIZ / "codebase").exists():
     fail("codebase/ existe (estructura vieja: debe ser main/ + worktrees/)")

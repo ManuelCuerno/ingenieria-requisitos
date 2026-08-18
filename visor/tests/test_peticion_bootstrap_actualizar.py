@@ -178,6 +178,11 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         self.assertFalse(
             (destino / "docs/05-trabajo/peticiones/LEGACY.json").exists()
         )
+        # Unidad 018: la política de publicación nace documentada en el repos.yaml, con sus
+        # dos valores. Si no se genera, nadie descubre nunca que el modo existe.
+        repos = (destino / "repos.yaml").read_text(encoding="utf-8")
+        self.assertRegex(repos, r"(?m)^\s*push:\s*agente")
+        self.assertIn("usuario", repos)
         lint = self.ejecutar(destino / "docs/00-metodo/scripts/lint_metodo.py")
         self.assertEqual(lint.returncode, 0, lint.stdout + lint.stderr)
 

@@ -119,6 +119,13 @@ mueve el mapa, toca hotspots o no cabe en una ficha— es carril normal, que es 
    (título con `NNN-slug`), y la rama queda
    PENDIENTE DE APROBACIÓN; el `estado: en_revision` lo escribe el padre al recibir el PR (regla 2). Sorpresas → `hallazgos.md`.
    Contradicción con la spec o el mapa → **PARAR y devolver la tarea**.
+
+   **Política de publicación (`push:` de `repos.yaml`).** Con `push: agente` —el defecto— este
+   paso es el de siempre. Con `push: usuario` termina en el **commit local**: ni `git push` ni
+   `gh pr create`. La rama se queda en su worktree y el comando exacto para publicarla
+   —`git -C main push -u origin NNN-slug`— se deja escrito en `hallazgos.md` (en exprés, que no
+   lo tiene, en el aviso al usuario), para que lo ejecute él con sus propios controles cuando
+   quiera.
 6. **Cierre (el padre, a petición del usuario).** Es el ritual indivisible de
    `runbooks/cierre.md` (con `gh` y sin `gh`), cerrado con `unidad.py cerrar`; resumen de
    los 7 pasos en `00-metodo/README.md` — aquí solo lo específico de una feature:

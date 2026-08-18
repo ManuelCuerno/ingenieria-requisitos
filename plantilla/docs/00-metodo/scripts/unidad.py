@@ -281,6 +281,37 @@ def repo_codigo():
     return repo_config.repo_code(RAIZ)
 
 
+def modo_push():
+    """Política de publicación del workspace (repos.yaml): `agente` (defecto) | `usuario`."""
+    return repo_config.modo_push(RAIZ)
+
+
+def avisar_principal_sin_empujar(repo, principal):
+    """Camino B del cierre: la rama principal local fusionada y todavía sin publicar.
+
+    Con `push: agente` es un descuido y se avisa: al despachar, la rama de cada unidad nace
+    de `origin/<principal>`, así que si el merge se queda en local la SIGUIENTE unidad parte
+    de una base vieja y su merge ya no será fast-forward. Con `push: usuario` es exactamente
+    lo que el workspace pidió (007, R2 punto 6): mismo comando, pero como recibo del cierre,
+    no como alarma. Sin remoto no hay nada que decir.
+    """
+    if git(repo, "remote", "get-url", "origin", silencioso=True)[0] != 0:
+        return
+    codigo, salida = git(repo, "rev-list", "--count",
+                         f"origin/{principal}..{principal}", silencioso=True)
+    if codigo != 0 or not salida.strip().isdigit() or int(salida.strip()) == 0:
+        return
+    comando = f"git -C {rel(repo)} push origin {principal}"
+    if modo_push() == "usuario":
+        ok(f"push: usuario — la rama principal local va {salida.strip()} commit(s) por "
+           f"delante de origin/{principal}: el método no la empuja. Publícala tú cuando "
+           f"quieras → {comando}")
+    else:
+        warn(f"la rama principal local va {salida.strip()} commit(s) por delante de "
+             f"origin/{principal}: empújala o la siguiente unidad partirá de una base "
+             f"vieja → {comando}")
+
+
 def git(repo, *args, silencioso=False):
     """Ejecuta git y devuelve (codigo, salida). Nunca lanza: los errores se deciden arriba."""
     try:
@@ -1888,16 +1919,8 @@ def _cerrar_bajo_lease(args, nombre, autoridad):
                f"refs/remotes/origin/{nombre}", silencioso=True)[0] == 0:
             ok(f"rama remota origin/{nombre}: se conserva (respaldo del trabajo entregado)")
 
-    # Camino B (merge local, sin `gh`): si la principal se queda sin empujar, la SIGUIENTE
-    # unidad nacerá de una `origin/<principal>` vieja y su merge ya no será fast-forward.
-    # Se avisa aquí, que es cuando acaba de pasar, y con el comando exacto.
-    if hay_repo and git(repo, "remote", "get-url", "origin", silencioso=True)[0] == 0:
-        codigo, salida = git(repo, "rev-list", "--count",
-                             f"origin/{principal}..{principal}", silencioso=True)
-        if codigo == 0 and salida.strip().isdigit() and int(salida.strip()) > 0:
-            warn(f"la rama principal local va {salida.strip()} commit(s) por delante de "
-                 f"origin/{principal}: empújala o la siguiente unidad partirá de una base "
-                 f"vieja → git -C {rel(repo)} push origin {principal}")
+    if hay_repo:
+        avisar_principal_sin_empujar(repo, principal)
 
     if clase == "bug":
         # ADR-006: la ficha del bug NO se archiva; docs/bugs/ es el historial.

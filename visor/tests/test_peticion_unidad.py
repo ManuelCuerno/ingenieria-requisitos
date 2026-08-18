@@ -409,6 +409,31 @@ class PeticionUnidadTest(unittest.TestCase):
         self.assertEqual(expres.returncode, 1, expres.stdout + expres.stderr)
         self.assertIn("ruta_local", (expres.stdout + expres.stderr).lower())
 
+    def test_unidad_rechaza_push_invalido_en_repos_yaml(self):
+        """Unidad 018: `push:` se valida en la misma lectura que `ruta_local`/`rama_principal`;
+        un valor que nadie entiende no arranca comandos con una política a medias."""
+        (self.ws / "repos.yaml").write_text(
+            "codigo:\n  ruta_local: main/\n  rama_principal: main\n  push: banana\n",
+            encoding="utf-8",
+        )
+
+        estado = self.ejecutar(self.unidad, "estado")
+
+        salida = estado.stdout + estado.stderr
+        self.assertEqual(estado.returncode, 1, salida)
+        self.assertIn("push", salida)
+        self.assertIn("agente | usuario", salida)
+
+    def test_sin_clave_push_el_estado_funciona_como_hoy(self):
+        """R3: el repos.yaml de siempre (sin `push:`) no cambia de comportamiento."""
+        (self.ws / "repos.yaml").write_text(
+            "codigo:\n  ruta_local: main/\n  rama_principal: main\n", encoding="utf-8",
+        )
+
+        estado = self.ejecutar(self.unidad, "estado")
+
+        self.assertEqual(estado.returncode, 0, estado.stdout + estado.stderr)
+
     def test_unidad_no_sigue_symlink_de_ficha_bug(self):
         nombre = self.preparar_hotfix("ficha-symlink")
         ficha = self.ws / "docs/bugs" / f"{nombre}.md"

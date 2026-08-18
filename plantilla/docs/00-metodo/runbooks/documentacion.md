@@ -41,6 +41,13 @@ repositorio de código, operación, API o explicación de un proceso.
 10. **Entrega.**
     - Si toca código: commit, push, PR, revisión, merge y verificación sobre `main`.
     - Si es documental: el padre integra el documento en el meta-repo.
+
+    **Política de publicación (`push:` de `repos.yaml`).** Con `push: agente` —el defecto— este
+    paso es el de siempre. Con `push: usuario` termina en el **commit local**: ni `git push` ni
+    `gh pr create`. La rama se queda en su worktree y el comando exacto para publicarla
+    —`git -C main push -u origin NNN-slug`— se deja escrito en `hallazgos.md` (en exprés, que
+    no lo tiene, en el aviso al usuario), para que lo ejecute él con sus propios controles
+    cuando quiera.
 11. **Validación del usuario.** El usuario lee la guía y realiza la tarea prometida. Sin su
     confirmación el trabajo sigue `en_revision`.
 12. **Cierre** (`runbooks/cierre.md`). Aplicar deltas aprobados, actualizar ESTADO/ROADMAP, promover aprendizajes,

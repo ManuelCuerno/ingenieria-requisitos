@@ -55,6 +55,13 @@ la revisión firmada por alguien que no construyó, y tu OK sobre la app corrien
    devuelve nada. Va contando por dónde va, una línea por casilla del plan (regla 16). El nivel
    de test lo fija la ficha: **el que demuestra ESTE cambio y ninguno más**; `despachar` bloquea
    si esa línea sigue sin rellenar. Commit, push, PR, y PARAR (estado → `en_revision`).
+
+   **Política de publicación (`push:` de `repos.yaml`).** Con `push: agente` —el defecto— este
+   paso es el de siempre. Con `push: usuario` termina en el **commit local**: ni `git push` ni
+   `gh pr create`. La rama se queda en su worktree y el comando exacto para publicarla
+   —`git -C main push -u origin NNN-slug`— se deja escrito en `hallazgos.md` (en exprés, que no
+   lo tiene, en el aviso al usuario), para que lo ejecute él con sus propios controles cuando
+   quiera.
 4. **Cierre.** El ritual de `runbooks/cierre.md`, con una sola diferencia: al cerrar solo se
    corren **los tests del área tocada**, no la suite entera. El revisor es un **agente fresco**
    como en cualquier otro carril — y aquí es obligado, porque quien construyó fue el padre. Lo

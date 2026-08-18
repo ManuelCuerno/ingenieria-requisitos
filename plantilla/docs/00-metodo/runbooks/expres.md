@@ -48,6 +48,13 @@ puertas, que es donde cae casi todo lo que se cuela mal por aquí.
 4. **Pull request.** Commit, push y PR con `expres` en el título. En el cuerpo: la frase del
    cambio y el **output de esos tests pegado** — no hay `hallazgos.md`, así que esa es la única
    evidencia que existirá. Sin output pegado no hay merge.
+
+   **Política de publicación (`push:` de `repos.yaml`).** Con `push: agente` —el defecto— este
+   paso es el de siempre. Con `push: usuario` termina en el **commit local**: ni `git push` ni
+   `gh pr create`. La rama se queda en su worktree y el comando exacto para publicarla
+   —`git -C main push -u origin NNN-slug`— se deja escrito en `hallazgos.md` (en exprés, que no
+   lo tiene, en el aviso al usuario), para que lo ejecute él con sus propios controles cuando
+   quiera.
 5. **Cierre (el padre).** Verificar el verde (sin revisor: en exprés la única puerta es el
    verde, `runbooks/cierre.md`) → merge → reconciliar el P-ID
    con evidencia → borrar worktree y rama. Se acabó: **NO
