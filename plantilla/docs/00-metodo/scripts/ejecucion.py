@@ -550,17 +550,72 @@ def checkpoint(recibo, nombre, estado, detalle):
     print(f"CHECKPOINT {nombre} {estado}: {detalle}", flush=True)
 
 
+def perfil_constructor(hallazgos):
+    """R3 (adversarial 12-08, hallazgo 9): el CONSTRUCTOR pierde escritura sobre
+    `especificacion.md` de su propia unidad — no puede autoaprobarse ni tocar su
+    contrato. Sus únicas escrituras persistentes en el meta-repo quedan en
+    `hallazgos.md`: las casillas `[x]` de su plan pasan a marcarse ahí (decisión
+    documentada en hallazgos.md de la unidad 028; la ficha ya no es su fichero).
+
+    `--add-dir` concede el DIRECTORIO entero, no fichero a fichero, y
+    `especificacion.md` vive en la misma carpeta que `hallazgos.md` — quitar la ficha de
+    esta lista no basta por sí sola. La frontera real la pone `_ficha_solo_lectura`,
+    forzando la ficha a modo lectura mientras corre el harness."""
+    return [hallazgos]
+
+
+def perfil_revisor(hallazgos):
+    """R4: el revisor conserva exactamente su escritura de hoy — solo `hallazgos.md`,
+    donde van su veredicto y su firma. La ficha nunca formó parte de su set escribible;
+    esta unidad no le recorta ni le añade nada."""
+    return [hallazgos]
+
+
+@contextlib.contextmanager
+def _ficha_solo_lectura(ruta):
+    """Fuerza `ruta` a modo lectura mientras dura el bloque y restaura su modo previo al
+    salir (incluso si el harness revienta). Es la única frontera de escritura real posible
+    para R3: sin sandbox de SO (unidad 012) y con `--add-dir` concediendo el directorio
+    entero, un permiso de fichero real es lo único que produce una denegación auténtica
+    del sistema operativo cuando el harness intenta escribir la ficha."""
+    modo_previo = stat.S_IMODE(ruta.stat().st_mode)
+    ruta.chmod(0o444)
+    try:
+        yield
+    finally:
+        ruta.chmod(modo_previo)
+
+
+def _huella_documentos(rutas):
+    """Contenido de cada documento escribible, para detectar si el harness tocó alguno
+    (R5/R6: trabajo acreditado = alguna casilla nueva o hallazgos.md cambiado)."""
+    huella = {}
+    for ruta in rutas:
+        try:
+            huella[str(ruta)] = hashlib.sha256(ruta.read_bytes()).hexdigest()
+        except OSError:
+            huella[str(ruta)] = None
+    return huella
+
+
 def _lanzar_bajo_lease(args, ficha, manager, autoridades):
     worktree, gitdir, common = resolver_worktree(args.unidad)
     home_original = Path(os.environ.get("HOME", str(Path.home()))).resolve()
     texto = encargo(
         args.unidad, args.rol, ficha, args.prompt, args.skill_tecnica, home_original
     )
+    ficha_bloqueada = None
     if ficha.parent == RAIZ / "docs/bugs":
+        # Los bugs no tienen hallazgos.md aparte: su propia ficha es a la vez contrato y
+        # bitácora de casillas (AGENTS.md regla 2), así que R3 no le aplica.
         documentos = [ficha]
     else:
         hallazgos = ficha.parent / "hallazgos.md"
-        documentos = [ficha, hallazgos] if args.rol == "constructor" else [hallazgos]
+        if args.rol == "constructor":
+            documentos = perfil_constructor(hallazgos)
+            ficha_bloqueada = ficha
+        else:
+            documentos = perfil_revisor(hallazgos)
     seguros = []
     for documento in documentos:
         try:
@@ -570,6 +625,7 @@ def _lanzar_bajo_lease(args, ficha, manager, autoridades):
         except workspace_paths.WorkspacePathError as exc:
             raise ErrorEjecucion(str(exc)) from exc
     documentos = seguros
+    huella_previa = _huella_documentos(documentos)
     ejecutable = shutil.which(args.harness)
     if not ejecutable:
         raise ErrorEjecucion(f"no encuentro el ejecutable {args.harness}")
@@ -626,7 +682,13 @@ def _lanzar_bajo_lease(args, ficha, manager, autoridades):
             lecturas=(RAIZ / "docs",),
             modelo=getattr(args, "modelo", None),
         )
-        try:
+        contexto_ficha = (
+            _ficha_solo_lectura(ficha_bloqueada)
+            if ficha_bloqueada is not None
+            else contextlib.nullcontext()
+        )
+
+        def _correr_harness():
             for autoridad in autoridades:
                 autoridad.assert_owner()
             gestion_leases.failpoint("ejecucion_antes_harness")
@@ -637,19 +699,25 @@ def _lanzar_bajo_lease(args, ficha, manager, autoridades):
             tope = getattr(args, "tope_minutos", 0) or 0
             # argv como lista, cwd fijado por código, sin sandbox de SO ni shell
             # intermedia (unidad 012: la garantía real, Aurora/ADR-022, era esto, no el
-            # aislamiento de SO).
-            resultado = subprocess.run(
-                comando_subproceso(ejecutable, argv, env), cwd=str(worktree), env=env,
-                stdin=subprocess.DEVNULL, timeout=tope * 60 if tope else None,
-            )
+            # aislamiento de SO). La ficha va en modo lectura durante todo este bloque
+            # cuando el rol es constructor (R3): es la única denegación real posible sin
+            # sandbox de SO, porque --add-dir concede el directorio entero.
+            with contexto_ficha:
+                return tope, subprocess.run(
+                    comando_subproceso(ejecutable, argv, env), cwd=str(worktree), env=env,
+                    stdin=subprocess.DEVNULL, timeout=tope * 60 if tope else None,
+                )
+
+        try:
+            tope, resultado = _correr_harness()
         except subprocess.TimeoutExpired as exc:
-            checkpoint(recibo, "harness", "fail", f"tope de {tope} min superado")
-            recibo["error"] = f"el harness superó el tope de {tope} min y fue detenido"
+            checkpoint(recibo, "harness", "fail", f"tope de {args.tope_minutos} min superado")
+            recibo["error"] = f"el harness superó el tope de {args.tope_minutos} min y fue detenido"
             recibo["git"]["final"] = evidencia_git(worktree)
             guardar_recibo(ruta_recibo, recibo)
             raise ErrorEjecucion(
-                f"{args.harness} superó el tope de {tope} min; el trabajo parcial queda "
-                f"en el worktree y el recibo en {ruta_recibo}") from exc
+                f"{args.harness} superó el tope de {args.tope_minutos} min; el trabajo "
+                f"parcial queda en el worktree y el recibo en {ruta_recibo}") from exc
         except OSError as exc:
             checkpoint(recibo, "harness", "fail", str(exc))
             recibo["error"] = str(exc)
@@ -662,8 +730,31 @@ def _lanzar_bajo_lease(args, ficha, manager, autoridades):
         recibo["git"]["final"] = evidencia_git(worktree)
         estado = "ok" if resultado.returncode == 0 else "fail"
         checkpoint(recibo, "harness", estado, f"exit {resultado.returncode}")
+        if resultado.returncode == 0:
+            # R5/R6: el recibo distingue "el proceso terminó sin error" de "hubo trabajo
+            # acreditado" — una casilla nueva marcada o hallazgos.md (o la ficha del bug)
+            # cambiado desde el arranque. Sin eso, `ok` mentía (hallazgo del análisis de
+            # cajas negras del 18-08: "el recibo mide el proceso, no el trabajo").
+            huella_posterior = _huella_documentos(documentos)
+            trabajo_acreditado = huella_posterior != huella_previa
+            recibo["trabajo"] = {
+                "acreditado": trabajo_acreditado,
+                "detalle": (
+                    "hallazgos.md (o la ficha del bug) cambió durante el harness"
+                    if trabajo_acreditado else
+                    "proceso terminó sin error, pero no acreditó trabajo (sin casillas "
+                    "nuevas ni hallazgos.md actualizado)"
+                ),
+            }
+            recibo["resultado"] = "ok" if trabajo_acreditado else "ok_sin_trabajo"
+        else:
+            recibo["resultado"] = "fail"
         guardar_recibo(ruta_recibo, recibo)
         print(f"RESULTADO {ruta_recibo}", flush=True)
+        if recibo["resultado"] == "ok_sin_trabajo":
+            print(
+                "AVISO ok_sin_trabajo: " + recibo["trabajo"]["detalle"], flush=True
+            )
         return resultado.returncode
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

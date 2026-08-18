@@ -410,7 +410,14 @@ class LeaseManager:
             return False
         if not _pid_vivo(pid):
             return False
-        return process_start_marker(pid) == owner.get("process_started")
+        marcador_actual = process_start_marker(pid)
+        if marcador_actual == "desconocido":
+            # R1 (adversarial 12-08, hallazgo 8): un marcador de arranque indeterminable
+            # con el PID vivo es "no lo sé", nunca "está muerto". Antes esto comparaba
+            # "desconocido" contra el marcador guardado, daba False y robaba el lease de un
+            # dueño VIVO. Fail-closed: se trata como vivo (None), igual que el host remoto.
+            return None
+        return marcador_actual == owner.get("process_started")
 
     def _active_records(self):
         self._ensure_directory(self.active, "raíz active de leases")
@@ -478,9 +485,21 @@ class LeaseManager:
                 for wanted in requested:
                     if self._conflict(existing["scope"], wanted):
                         owner = existing.get("owner", {})
+                        ruta_lease = self._path(existing["scope"])
+                        # R1: el aspirante necesita PID, ruta del lease y el comando de
+                        # desbloqueo manual — el lease NO se roba solo porque el marcador de
+                        # arranque sea indeterminable; esto es lo que le dice a un humano
+                        # cómo destrabarlo él mismo tras comprobar el dueño (mismo criterio
+                        # auditable que `peticion.py desbloquear`, adaptado a leases: nunca
+                        # automático, siempre tras comprobar que el proceso ya no existe).
                         raise LeaseBusy(
                             f"scope {wanted} ocupado por sesión "
-                            f"{owner.get('session_id', '?')} en {owner.get('host', '?')}"
+                            f"{owner.get('session_id', '?')} en {owner.get('host', '?')} "
+                            f"(PID {owner.get('pid', '?')}); lease: {ruta_lease}. Si "
+                            f"compruebas que ese PID ya no está vivo, desbloquéalo a mano "
+                            f"borrando ese fichero (mismo criterio auditable que "
+                            f"`peticion.py desbloquear`: primero comprueba el dueño, luego "
+                            f"retira el lock — nunca automático)."
                         )
             operation = str(uuid.uuid4())
             records = []

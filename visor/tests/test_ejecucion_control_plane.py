@@ -173,6 +173,40 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         else:
             self.hacer_ejecutable(self.bin / nombre, "#!/usr/bin/env python3\n" + cuerpo)
 
+    def crear_doble_harness_que_intenta_escribir_ficha(self, nombre):
+        # Unidad 028, R3: el doble intenta escribir la ficha canónica que lee de su propio
+        # prompt ("CONTRATO: <ruta>") y deja constancia de si lo consiguió o de la
+        # denegación real que recibió — sin esto no hay forma de comprobar la frontera
+        # desde fuera del proceso del harness.
+        cuerpo = """import json, pathlib, re, sys
+prompt = sys.argv[-1]
+encontrado = re.search(r'CONTRATO: (.+)', prompt)
+ficha = encontrado.group(1).strip() if encontrado else None
+registro = {'ficha': ficha, 'escribio': False, 'error': None}
+try:
+    with open(ficha, 'a', encoding='utf-8') as fh:
+        fh.write('\\nINTENTO_DE_ESCRITURA_DEL_CONSTRUCTOR\\n')
+    registro['escribio'] = True
+except OSError as exc:
+    registro['error'] = str(exc)
+pathlib.Path('.intento-escritura-ficha.json').write_text(json.dumps(registro))
+"""
+        self.hacer_ejecutable(self.bin / nombre, "#!/usr/bin/env python3\n" + cuerpo)
+
+    def crear_doble_harness_que_marca_trabajo(self, nombre):
+        # Unidad 028, R6: el doble SÍ trabaja de verdad — escribe en hallazgos.md, que es
+        # justo lo que el recibo debe acreditar como trabajo real.
+        cuerpo = """import json, pathlib, re, sys
+prompt = sys.argv[-1]
+encontrado = re.search(r'CONTRATO: (.+)', prompt)
+ficha = pathlib.Path(encontrado.group(1).strip())
+hallazgos = ficha.parent / 'hallazgos.md'
+with open(hallazgos, 'a', encoding='utf-8') as fh:
+    fh.write('\\n- [x] trabajo marcado por el doble de prueba\\n')
+pathlib.Path('.harness-record.json').write_text(json.dumps({'trabajo_marcado': True}))
+"""
+        self.hacer_ejecutable(self.bin / nombre, "#!/usr/bin/env python3\n" + cuerpo)
+
     def argumentos(self, harness="claude", rol="constructor", skills=(),
                    prompt="Haz la tarea", unidad=None):
         args = [
@@ -458,6 +492,78 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         )
         self.assertTrue(all(item["estado"] == "ok" for item in recibo["checkpoints"]))
         self.assertIn("RESULTADO", resultado.stdout)
+
+    # --- Unidad 028: control plane endurecido -----------------------------------------
+
+    def test_constructor_no_puede_escribir_su_propia_ficha(self):
+        # R3 (adversarial 12-08, hallazgo 9): el constructor pierde escritura sobre
+        # especificacion.md de su unidad. La denegación tiene que ser REAL (regla del
+        # método para permisos), no solo la ausencia de la ruta en argv.
+        self.crear_doble_harness_que_intenta_escribir_ficha("claude")
+        ficha = self.ws / "docs/05-trabajo" / self.unidad / "especificacion.md"
+        contenido_previo = ficha.read_text(encoding="utf-8")
+
+        resultado = self.ejecutar()
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        intento = json.loads((self.worktree / ".intento-escritura-ficha.json").read_text())
+        self.assertEqual(intento["ficha"], str(ficha.resolve()))
+        self.assertFalse(
+            intento["escribio"], f"el constructor pudo escribir su propia ficha: {intento}"
+        )
+        self.assertTrue(
+            intento["error"], f"se esperaba una denegación REAL del sistema de ficheros: {intento}"
+        )
+        self.assertEqual(
+            ficha.read_text(encoding="utf-8"), contenido_previo,
+            "la ficha no debe cambiar aunque el intento de escritura falle",
+        )
+        # La frontera es solo mientras corre el harness: el padre debe poder seguir
+        # escribiendo la ficha después (aprobado:, estado: en_revision, ...).
+        ficha.write_text(contenido_previo + "\n# tocado por el padre tras el harness\n",
+                         encoding="utf-8")
+
+    def test_revisor_no_pierde_escritura_de_hallazgos(self):
+        # R4: nada de esta unidad recorta al revisor — sigue sin la ficha en su set
+        # escribible (como hoy) y sin que se le fuerce ningún modo de solo lectura.
+        ficha = self.ws / "docs/05-trabajo" / self.unidad / "especificacion.md"
+        modo_previo = ficha.stat().st_mode
+
+        resultado = self.ejecutar(rol="revisor")
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        self.assertEqual(
+            ficha.stat().st_mode, modo_previo,
+            "R4: el revisor no toca el modo de la ficha, ni antes ni ahora",
+        )
+
+    def test_recibo_ok_sin_trabajo_cuando_el_harness_no_toca_nada(self):
+        # R5: el fallo del "verde que miente" — exit 0 sin ninguna casilla nueva ni
+        # hallazgos.md actualizado debe distinguirse de un ok real.
+        resultado = self.ejecutar()
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        recibo = json.loads(
+            next((self.ws / ".runtime/ejecuciones").glob("001-demo-*.json")).read_text()
+        )
+        self.assertEqual(recibo["resultado"], "ok_sin_trabajo")
+        self.assertFalse(recibo["trabajo"]["acreditado"])
+        self.assertIn("no acreditó trabajo", recibo["trabajo"]["detalle"])
+        self.assertIn("ok_sin_trabajo", resultado.stdout)
+
+    def test_recibo_ok_cuando_el_harness_marca_trabajo(self):
+        # R6 (caso límite): el falso positivo inverso no se introduce — si SÍ hubo
+        # trabajo real, el recibo sigue diciendo ok, igual que hoy.
+        self.crear_doble_harness_que_marca_trabajo("claude")
+
+        resultado = self.ejecutar()
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        recibo = json.loads(
+            next((self.ws / ".runtime/ejecuciones").glob("001-demo-*.json")).read_text()
+        )
+        self.assertEqual(recibo["resultado"], "ok")
+        self.assertTrue(recibo["trabajo"]["acreditado"])
 
     def test_aurora_old_new_y_mutante_de_cwd(self):
         # OLD: un proceso heredado desde main ve el cwd equivocado y una variable vacía
