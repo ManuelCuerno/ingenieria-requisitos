@@ -858,8 +858,11 @@ def evidencia_rama_fusionada(repo, rama, principal, metadata):
         repo, "rev-parse", "--verify", "--quiet", f"{rama}^{{commit}}"
     )
     punta = punta_viva.strip() if codigo == 0 else metadata.get("tip_sha", "")
-    if not base_sha or not punta or punta == base_sha:
+    if punta == base_sha:
         return None
+    # Sin punta (rama borrada tras el merge y sin tip_sha guardado) los caminos
+    # por ancestría no existen, pero el grep del squash de más abajo sigue
+    # valiendo: el asunto del merge es el testigo (bug 021).
     punta_existe = git(
         repo, "rev-parse", "--verify", "--quiet", f"{punta}^{{commit}}"
     )[0] == 0
@@ -880,21 +883,31 @@ def evidencia_rama_fusionada(repo, rama, principal, metadata):
                 "modo_fusion": "squash",
             }
 
-    if not punta_existe or git(
-        repo, "merge-base", "--is-ancestor", base_sha, punta
-    )[0] != 0:
-        return None
-    if git(repo, "merge-base", "--is-ancestor", punta, principal)[0] == 0:
-        return {"tip_sha": punta, "merge_sha": punta, "modo_fusion": "ancestry"}
+    if punta:
+        if not punta_existe or git(
+            repo, "merge-base", "--is-ancestor", base_sha, punta
+        )[0] != 0:
+            return None
+        if git(repo, "merge-base", "--is-ancestor", punta, principal)[0] == 0:
+            return {"tip_sha": punta, "merge_sha": punta, "modo_fusion": "ancestry"}
 
-    codigo, salida = git(
-        repo, "log", principal, f"^{base_sha}", "--fixed-strings", f"--grep={rama}",
-        "--format=%H", "-1",
-    )
-    merge_sha = salida.strip() if codigo == 0 else ""
-    return {
-        "tip_sha": punta, "merge_sha": merge_sha, "modo_fusion": "squash"
-    } if merge_sha else None
+    # Grep del squash: primero el nombre exacto de la rama; si el título del PR
+    # no lo conservó (p. ej. "expres P-… " con espacio), vale el P-ID que el
+    # nombre de una rama exprés siempre contiene. Un asunto sin ninguno de los
+    # dos NO es testigo: esto no se relaja (bug 021).
+    patrones = [rama]
+    p_id = re.search(r"P-\d{8}-[0-9a-f]{8}", rama)
+    if p_id:
+        patrones.append(p_id.group(0))
+    for patron in patrones:
+        codigo, salida = git(
+            repo, "log", principal, f"^{base_sha}", "--fixed-strings",
+            f"--grep={patron}", "--format=%H", "-1",
+        )
+        merge_sha = salida.strip() if codigo == 0 else ""
+        if merge_sha:
+            return {"tip_sha": punta, "merge_sha": merge_sha, "modo_fusion": "squash"}
+    return None
 
 
 def validar_enlace_canonico(tipo, ruta, pid, revision):

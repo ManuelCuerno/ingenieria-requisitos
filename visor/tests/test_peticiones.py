@@ -1299,5 +1299,92 @@ else:
         )
 
 
+class EvidenciaRamaFusionadaTest(unittest.TestCase):
+    """Bug 021: el testigo del squash debe reconocer un merge REAL aunque la
+    rama exprés ya no exista, no haya tip_sha guardado y el título del PR no
+    conservara el nombre exacto de la rama — el P-ID que ese nombre siempre
+    contiene basta como patrón. Los caminos estrictos no se relajan."""
+
+    RAMA = "expres-P-20260815-032bc9b1-gitignore-ci-visor-contratos"
+
+    def setUp(self):
+        import importlib.util
+        sys.path.insert(0, str(SCRIPTS))
+        self.addCleanup(sys.path.remove, str(SCRIPTS))
+        spec = importlib.util.spec_from_file_location("peticion_bajo_prueba", PETICION)
+        self.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.mod)
+        self.tmp = tempfile.TemporaryDirectory(prefix="testigo-squash-")
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = Path(self.tmp.name) / "codigo"
+        self.repo.mkdir()
+        self.git("init", "-b", "main")
+        self.git("config", "user.name", "Test")
+        self.git("config", "user.email", "test@example.com")
+        (self.repo / "a.txt").write_text("base\n", encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-m", "base")
+        self.base = self.git("rev-parse", "HEAD")
+
+    def git(self, *args):
+        return subprocess.run(
+            ["git", *args], cwd=self.repo, check=True, text=True, capture_output=True
+        ).stdout.strip()
+
+    def squash_en_main(self, asunto):
+        (self.repo / "a.txt").write_text("cambio\n", encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-m", asunto)
+        return self.git("rev-parse", "HEAD")
+
+    def test_squash_real_sin_rama_viva_se_reconoce_por_el_p_id(self):
+        merge = self.squash_en_main(
+            "expres P-20260815-032bc9b1: desbloquea visor_contratos/ (#16)"
+        )
+        prueba = self.mod.evidencia_rama_fusionada(
+            self.repo, self.RAMA, "main", {"base_sha": self.base}
+        )
+        self.assertIsNotNone(
+            prueba, "un squash real con el P-ID en el asunto debe valer como testigo"
+        )
+        self.assertEqual(merge, prueba["merge_sha"])
+        self.assertEqual("squash", prueba["modo_fusion"])
+
+    def test_sin_p_id_ni_nombre_de_rama_sigue_sin_testigo(self):
+        self.squash_en_main("commit directo cualquiera sin rastro de la peticion")
+        prueba = self.mod.evidencia_rama_fusionada(
+            self.repo, self.RAMA, "main", {"base_sha": self.base}
+        )
+        self.assertIsNone(prueba, "sin P-ID ni nombre de rama no hay testigo: no se relaja")
+
+    def test_base_fuera_de_la_principal_sigue_sin_testigo(self):
+        """La guarda de ancestría de base_sha debe frenar ANTES del grep: un
+        base de una rama huérfana (no ancestro de main) no gana testigo aunque
+        el asunto del squash contenga el P-ID (hueco 1 de la revisión: el test
+        anterior pasaba por accidente vía punta == base_sha)."""
+        subprocess.run(
+            ["git", "checkout", "--orphan", "huerfana"],
+            cwd=self.repo, check=True, capture_output=True,
+        )
+        (self.repo / "b.txt").write_text("otra historia\n", encoding="utf-8")
+        self.git("add", ".")
+        self.git("commit", "-m", "raiz ajena")
+        base_ajena = self.git("rev-parse", "HEAD")
+        self.git("checkout", "main")
+        self.squash_en_main("expres P-20260815-032bc9b1: lo que sea (#16)")
+
+        prueba = self.mod.evidencia_rama_fusionada(
+            self.repo, self.RAMA, "main", {"base_sha": base_ajena}
+        )
+
+        self.assertIsNone(
+            prueba, "un base_sha fuera de la principal no puede ganar testigo por grep"
+        )
+        # Y sin base_sha en absoluto, tampoco (guarda de cabecera).
+        self.assertIsNone(
+            self.mod.evidencia_rama_fusionada(self.repo, self.RAMA, "main", {})
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
