@@ -267,6 +267,20 @@
     return html + "</tr>";
   }
 
+  /* Una línea SOLO corta un párrafo en marcha si de verdad empieza un bloque
+     distinto — los mismos cuatro criterios que ya usa `bloques` para entrar en
+     cada bloque. Antes esto lo decidía una regex más laxa (`^[-*>|#]`, sin
+     exigir el espacio que sí exige la de listas) y una línea que empezaba por
+     `**negrita` (un solo `*` inicial, ningún espacio detrás) se colaba como
+     "ya es otra cosa": el bucle de párrafo se paraba sin consumir esa línea NI
+     avanzar el índice, y el bucle de `bloques` se quedaba mirándola para
+     siempre — pestaña colgada, sin excepción que avisara (bug real, hallado
+     con un contrato real de la unidad 059 de `la-tercera-mano-agents`). */
+  function esInicioDeBloque(p) {
+    return /^(#{3,6})\s+/.test(p) || p.charAt(0) === "|" || /^>\s?/.test(p) ||
+           /^([-*]|\d+\.)\s+/.test(p) || /^```/.test(p);
+  }
+
   function bloques(lineas) {
     var html = "";
     var i = 0;
@@ -362,7 +376,7 @@
       var parrafo = [];
       while (i < lineas.length) {
         var p = lineas[i].trim();
-        if (!p || /^([-*>|#]|\d+\.\s)/.test(p) || /^```/.test(p)) break;
+        if (!p || esInicioDeBloque(p)) break;
         parrafo.push(p);
         i++;
       }
