@@ -1118,6 +1118,52 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         # Y el script que ese comando invoca viaja en la misma actualización.
         self.assertTrue((ws / "docs/00-metodo/scripts/herramienta.py").is_file())
 
+    def test_agents_md_avisa_lo_primero_incluso_en_arranque_ligero(self):
+        """Unidad 032 (orden de Nate, 19-08): el aviso de método debe salir en
+        CUALQUIER arranque, también en solo-consulta, y ser "lo primero de lo
+        primero". El AGENTS.md repartido tiene que (a) ordenar el chequeo ANTES de
+        la regla de arranque ligero, (b) mandar que el PRIMER párrafo al usuario
+        sea el aviso con sus cuatro respuestas, y (c) prohibir posponerlo o
+        mencionarlo de pasada — que es exactamente lo que pasó en campo."""
+        ws = self.workspace_antiguo(con_trabajo=False, nombre="aviso-primero-agents")
+
+        resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
+
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        agents = (ws / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("también en solo-consulta", agents)
+        self.assertIn("PRIMER párrafo", agents)
+        self.assertIn("posponerlo", agents)
+        idx_aviso = agents.index("herramienta.py comprobar")
+        idx_ligero = agents.index("Solo-consulta arranca ligero")
+        self.assertLess(idx_aviso, idx_ligero,
+                        "el chequeo del método debe ordenarse ANTES del arranque ligero")
+        # Sin versión nueva, sin red o sin acceso: ni una línea (el silencio no empeora).
+        self.assertIn("sin aviso", agents)
+
+    def test_bootstrap_siembra_personalidad_y_la_anuncia_una_vez(self):
+        """Unidad 032: .claude/personalidad.md nace de serie como placeholder (adiós
+        al aviso "no existe" en cada arranque). Quien lo menciona, UNA sola vez, es
+        el propio bootstrap en su salida. Y el AGENTS.md repartido manda: placeholder
+        sin directrices ni se aplica ni se menciona; si falta (workspace viejo), el
+        agente lo crea en silencio."""
+        destino = self.base / "personalidad-agents"
+        resultado = self.ejecutar(
+            BOOTSTRAP, "--planos", str(self.planos_minimos()), "--destino", str(destino)
+        )
+        self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
+        fichero = destino / ".claude/personalidad.md"
+        self.assertTrue(fichero.is_file())
+        texto = fichero.read_text(encoding="utf-8")
+        self.assertIn("Personalidad del agente", texto)
+        self.assertIn("tono", texto)
+        self.assertEqual(resultado.stdout.count("personalidad.md"), 1,
+                         "el bootstrap lo anuncia UNA vez, ni cero ni dos:\n"
+                         + resultado.stdout)
+        agents = (destino / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("ni lo apliques ni lo menciones", agents)
+        self.assertIn("créalo tú en silencio", agents)
+
     def test_agents_md_actualizado_conserva_el_aviso_de_personalidad_corrupta(self):
         """R-1604: la instrucción de avisar una vez y seguir con el tono por defecto
         ante un .claude/personalidad.md corrupto vive en AGENTS.md, así que Modo D

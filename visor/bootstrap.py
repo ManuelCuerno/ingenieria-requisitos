@@ -259,6 +259,31 @@ def sembrar_config_canario(destino):
     return True
 
 
+PLACEHOLDER_PERSONALIDAD = """\
+# Personalidad del agente (opcional)
+
+> Este fichero define CÓMO te habla el agente (tono, muletillas, idioma), no QUÉ hace.
+> Está vacío a propósito: sin directrices, el agente usa su tono normal y no avisa de nada.
+> Escribe aquí lo que quieras cambiar (p. ej. "háblame de tú, directo, sin emojis") y
+> aplicará desde el siguiente arranque. Vive fuera de git: es tuyo, nadie lo pisa.
+"""
+
+
+def sembrar_personalidad(destino):
+    """Deja `.claude/personalidad.md` de serie (unidad 032, orden de Nate): sin él, el
+    puente CLAUDE.md importa un fichero inexistente y cada arranque suelta el aviso de
+    "no existe". Nace como placeholder que ni se aplica ni se menciona; el ÚNICO anuncio
+    de su existencia es el del bootstrap, una vez. Idempotente: si el dueño ya escribió
+    el suyo, no se toca."""
+    carpeta = destino / ".claude"
+    carpeta.mkdir(parents=True, exist_ok=True)
+    fichero = carpeta / "personalidad.md"
+    if fichero.is_file():
+        return False
+    fichero.write_text(PLACEHOLDER_PERSONALIDAD, encoding="utf-8")
+    return True
+
+
 def morir(msg):
     sys.exit(f"bootstrap: {msg}")
 
@@ -970,6 +995,9 @@ def main():
     # `.claude/` (gitignorada) porque son preferencia local del dueño, no método repartido.
     sembrar_hook_canario(destino)
     sembrar_config_canario(destino)
+    if sembrar_personalidad(destino):
+        print("  · .claude/personalidad.md creado: edítalo si quieres cambiar el tono del "
+              "agente (este aviso sale solo esta vez)")
     (destino / "README.md").write_text(
         generar_readme(titulo, frase, remoto_meta, destino.name), encoding="utf-8")
     # setup.py: deja el workspace listo en cualquier ordenador (lee repos.yaml, clona o
