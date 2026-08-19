@@ -186,6 +186,12 @@ fallo crítico permite una segunda ronda. Preparar hoy problemas que aún no exi
 - `scripts/doctor.py` — **qué hay de verdad en esta máquina** (Python, git y su identidad,
   `gh`, Docker, Node) y qué implica cada ausencia. Lo corre `setup.py` y la fase 4: el ROADMAP
   no fija una herramienta que no esté aquí en verde. Informa, nunca bloquea.
+- `scripts/herramienta.py` — **el canal de actualización, sin depender de que la herramienta
+  esté en el disco**: `comprobar` mira contra el repo del método (`origen` de `METODO.json`)
+  leyendo solo su fichero de versión —un `git ls-remote` y, si se movió, un clon superficial
+  y sparse—; `aplicar` consigue la herramienta (tu clon si está sano, con `pull --ff-only`;
+  si no, una descarga a carpeta temporal, sin reparar jamás la tuya) y delega en su
+  `visor/actualizar.py`. Sin red, sin credenciales o sin `origen`: silencio y exit 0.
 - `scripts/lint_metodo.py` — **el linter del método**: valida estructura congelada,
   vocabulario cerrado, frontmatters, aprobación del usuario en lo que está en obra, deudas de
   hotfix sin pagar (WARN dentro de las 24 h, FAIL pasadas o si la unidad ya está mergeada),

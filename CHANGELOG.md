@@ -4,6 +4,24 @@ La versión del método viaja con cada proyecto (en su `METODO.json`). Para llev
 estas mejoras a tus proyectos ya creados: abre tu agente aquí y dile «pon al día
 mis proyectos».
 
+## 1.7.0 — 2026-08-19
+
+Publicación de refuerzo, a orden de Nate, para forzar el primer update de campo por el
+canal nuevo: sin cambios de comportamiento sobre la 1.6.0.
+
+## 1.6.0 — 2026-08-19
+
+**El workspace se actualiza aunque la herramienta no esté en el ordenador** (unidad 031,
+prioridad máxima de Nate). Un script nuevo viaja con el método en cada workspace,
+`docs/00-metodo/scripts/herramienta.py`: al arrancar, `comprobar` mira contra GitHub
+(el `origen` grabado en `METODO.json`) solo el fichero de versión, con un presupuesto
+total de 15 segundos; si hay versión nueva pregunta, y con el «sí» consigue la
+herramienta solo — tu clon si está limpio y es del mismo origen (`pull --ff-only`), o
+una descarga a carpeta temporal si no está o está enferma, sin reparar ni tocar jamás
+tu carpeta. Al terminar ofrece actualizar los demás workspaces. Sin red o sin
+credenciales: silencio y arranque normal. Revisado en dos rondas (Codex): un clon
+enfermo no recibe ni un fetch, y una copia local de otro origen no ejecuta ni una línea.
+
 ## 1.5.0 — 2026-08-18
 
 La campaña de las cajas negras: 45 incidentes de campo de 7 workspaces analizados en un
