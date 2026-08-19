@@ -5,6 +5,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -109,8 +110,30 @@ class ControlPlaneE2ETest(unittest.TestCase):
         return resultado
 
     def hacer_ejecutable(self, ruta, texto):
-        ruta.write_text(texto, encoding="utf-8")
-        ruta.chmod(ruta.stat().st_mode | stat.S_IXUSR)
+        if os.name == "nt":
+            # shutil.which en Windows solo prueba el nombre pelado si YA termina en
+            # una extensión de PATHEXT: un fichero sin extensión (el shebang POSIX
+            # de abajo) nunca se encuentra por PATH. El doble necesita una extensión
+            # reconocida (.bat) que reenvíe al intérprete real.
+            script = ruta.with_suffix(".py")
+            script.write_text(texto, encoding="utf-8")
+            ruta.with_suffix(".bat").write_text(
+                f'@"{sys.executable}" "{script}" %*\r\n', encoding="utf-8"
+            )
+        else:
+            ruta.write_text(texto, encoding="utf-8")
+            ruta.chmod(ruta.stat().st_mode | stat.S_IXUSR)
+
+    def assertRutaIgual(self, observada, esperada):
+        """Compara identidad de fichero, no representación textual: en Windows
+        una ruta puede volver en su alias corto 8.3 (RUNNER~1 vs runneradmin)."""
+        esperada = str(esperada)
+        if observada == esperada:
+            return
+        self.assertTrue(
+            os.path.samefile(observada, esperada),
+            f"{observada!r} no es la misma ruta que {esperada!r}",
+        )
 
     def crear_doble_harness(self, nombre):
         self.hacer_ejecutable(
@@ -160,27 +183,31 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         )
 
     def proceso_en_barrera(self, nombre="ejecucion_antes_harness", unidad=None):
-        ready_read, ready_write = os.pipe()
-        wait_read, wait_write = os.pipe()
+        # Barrera por ficheros, no por pipes: pass_fds no existe en Windows (los FDs
+        # no cruzan procesos), mismo patrón que ya usa lease.py::failpoint() y
+        # test_peticion_bootstrap_actualizar.py.
+        barrera = Path(tempfile.mkdtemp(prefix="barrera-"))
+        self.addCleanup(shutil.rmtree, barrera, True)
+        ready = barrera / "ready"
+        gate = barrera / "gate"
         env = self.env.copy()
         prefijo = f"IR_FAILPOINT_{nombre.upper()}"
-        env[f"{prefijo}_READY_FD"] = str(ready_write)
-        env[f"{prefijo}_WAIT_FD"] = str(wait_read)
+        env[f"{prefijo}_READY_FILE"] = str(ready)
+        env[f"{prefijo}_WAIT_FILE"] = str(gate)
         env["IR_SESSION_ID"] = "ejecucion-a"
         proceso = subprocess.Popen(
             self.argumentos(unidad=unidad), cwd=self.main, env=env, text=True,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            pass_fds=(ready_write, wait_read),
         )
-        os.close(ready_write)
-        os.close(wait_read)
         self.addCleanup(lambda: proceso.poll() is None and proceso.kill())
-        import select
-        legibles, _, _ = select.select([ready_read], [], [], 5)
-        self.assertEqual(legibles, [ready_read], "el launcher no alcanzó la barrera")
-        self.assertEqual(os.read(ready_read, 1), b"1")
-        os.close(ready_read)
-        return proceso, wait_write
+        limite = time.monotonic() + 5
+        while not ready.exists():
+            self.assertTrue(
+                time.monotonic() < limite and proceso.poll() is None,
+                "el launcher no alcanzó la barrera",
+            )
+            time.sleep(0.01)
+        return proceso, gate
 
     def crear_unidad_paralela(self, nombre, recurso):
         ficha = self.ws / "docs/05-trabajo" / nombre / "especificacion.md"
@@ -203,8 +230,8 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
 
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
         harness = self.registros()
-        self.assertEqual(harness["cwd"], str(self.worktree.resolve()))
-        self.assertEqual(harness["pwd"], str(self.worktree.resolve()))
+        self.assertRutaIgual(harness["cwd"], self.worktree.resolve())
+        self.assertRutaIgual(harness["pwd"], self.worktree.resolve())
         self.assertEqual(harness["branch"], self.unidad)
         self.assertEqual(harness["tmp_mode"], 0o700)
         self.assertTrue(all(value is None for value in harness["poison"].values()))
@@ -315,8 +342,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
 
         self.assertNotEqual(segundo.returncode, 0)
         self.assertIn("ocupado", segundo.stderr.lower())
-        os.write(gate, b"1")
-        os.close(gate)
+        gate.write_text("1")
         salida, error = primero.communicate(timeout=10)
         self.assertEqual(primero.returncode, 0, salida + error)
         recibos = list((self.ws / ".runtime/ejecuciones").glob("001-demo-*.json"))
@@ -333,8 +359,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
 
         self.assertNotEqual(resultado.returncode, 0)
         self.assertIn("resource:app/demo.py", resultado.stderr)
-        os.write(gate, b"1")
-        os.close(gate)
+        gate.write_text("1")
         salida, error = primero.communicate(timeout=10)
         self.assertEqual(primero.returncode, 0, salida + error)
         self.assertFalse(
@@ -350,7 +375,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         recibo = json.loads(recibos[0].read_text(encoding="utf-8"))
         self.assertEqual(recibo["schema"], "ejecucion/v1")
         self.assertEqual(recibo["unidad"], self.unidad)
-        self.assertEqual(recibo["cwd"], str(self.worktree.resolve()))
+        self.assertRutaIgual(recibo["cwd"], self.worktree.resolve())
         self.assertEqual(recibo["rama"], self.unidad)
         self.assertEqual(recibo["exit_code"], 0)
         self.assertEqual(
@@ -381,7 +406,8 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
             cwd=self.main, env=self.env, text=True, capture_output=True,
         )
         observado_old = json.loads(old.stdout)
-        self.assertEqual(observado_old, {"cwd": str(self.main.resolve()), "target": "/mut048"})
+        self.assertEqual(observado_old["target"], "/mut048")
+        self.assertRutaIgual(observado_old["cwd"], self.main.resolve())
 
         # NEW: el control plane corrige cwd antes de ejecutar el harness — por código,
         # sin sandbox de SO de por medio (unidad 012: esta es la garantía que se
@@ -389,7 +415,7 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         nuevo = self.ejecutar()
         self.assertEqual(nuevo.returncode, 0, nuevo.stdout + nuevo.stderr)
         harness = self.registros()
-        self.assertEqual(harness["cwd"], str(self.worktree.resolve()))
+        self.assertRutaIgual(harness["cwd"], self.worktree.resolve())
 
         # Unidad 012 retira el tercer tramo (MUTANTE) de este test: verificaba que un
         # `cwd` de arranque incorrecto fallara en claro, pero esa verificación vivía en
