@@ -4,6 +4,18 @@ La versión del método viaja con cada proyecto (en su `METODO.json`). Para llev
 estas mejoras a tus proyectos ya creados: abre tu agente aquí y dile «pon al día
 mis proyectos».
 
+## 1.7.1 — 2026-08-19
+
+**El aviso de actualización es lo primero que ves, en cualquier arranque** (unidad 032,
+orden de Nate tras verlo enterrarse en campo). El chequeo del método pasa a ser el paso 0
+del arranque y no se salta jamás — tampoco en un simple «hola»—: con versión nueva, el
+primer párrafo del agente ES el aviso con sus cuatro respuestas; posponerlo o mencionarlo
+de pasada queda definido como fallo de arranque. Además `.claude/personalidad.md` nace de
+serie en cada workspace (placeholder anunciado una sola vez por el bootstrap) y los
+workspaces anteriores lo crean solos en silencio: se acabó el aviso de «no existe» en cada
+arranque. Revisado en dos rondas (Codex): las obligaciones históricas del canal («UNA vez
+por sesión», «confirma qué cambió») se conservan.
+
 ## 1.7.0 — 2026-08-19
 
 Publicación de refuerzo, a orden de Nate, para forzar el primer update de campo por el
