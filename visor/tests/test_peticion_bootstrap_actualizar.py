@@ -1098,8 +1098,12 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
 
     def test_agents_md_reparte_el_canal_proactivo(self):
         """El arranque del agente hijo (AGENTS.md, repartido por Modo D) trae el
-        chequeo proactivo: preferencia en .claude/actualizaciones.md, comando
-        `avisar` y las cuatro respuestas, sin bloquear si no hay red o acceso."""
+        chequeo proactivo: preferencia en .claude/actualizaciones.md, el comando que
+        comprueba y las cuatro respuestas, sin bloquear si no hay red o acceso.
+
+        Unidad 031: ese comando ya no es una ruta a la herramienta (que puede no
+        existir en el disco) sino el script del propio workspace; el resto del
+        contrato del canal es el mismo y se sigue exigiendo aquí."""
         ws = self.workspace_antiguo(con_trabajo=False, nombre="canal-agents")
 
         resultado = self.ejecutar(ACTUALIZAR, "aplicar", str(ws))
@@ -1107,10 +1111,12 @@ class PeticionBootstrapActualizarTest(unittest.TestCase):
         self.assertEqual(resultado.returncode, 0, resultado.stdout + resultado.stderr)
         agents = (ws / "AGENTS.md").read_text(encoding="utf-8")
         self.assertIn(".claude/actualizaciones.md", agents)
-        self.assertIn("actualizar.py avisar", agents)
-        self.assertIn("--nunca", agents)
+        self.assertIn("docs/00-metodo/scripts/herramienta.py comprobar", agents)
+        self.assertIn("herramienta.py nunca", agents)
         self.assertIn("aplicar --todos", agents)
         self.assertIn("sin aviso", agents)
+        # Y el script que ese comando invoca viaja en la misma actualización.
+        self.assertTrue((ws / "docs/00-metodo/scripts/herramienta.py").is_file())
 
     def test_agents_md_actualizado_conserva_el_aviso_de_personalidad_corrupta(self):
         """R-1604: la instrucción de avisar una vez y seguir con el tono por defecto

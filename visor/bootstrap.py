@@ -90,8 +90,8 @@ PLANTILLAS = ("agents-repo-codigo", "bug", "conocimiento", "decision", "desplieg
               "peticion-investigacion-informe", "peticion-investigacion-plan",
               "peticion-investigacion-sintesis", "roadmap", "sintesis")
 SCRIPTS = ("caja_negra.py", "canario.py", "control_plane.py", "doctor.py", "ejecucion.py",
-           "lint_ci.py", "lint_deploy.py", "lint_metodo.py", "lease.py", "peticion.py",
-           "repo_config.py", "unidad.py", "workspace_paths.py")
+           "herramienta.py", "lint_ci.py", "lint_deploy.py", "lint_metodo.py", "lease.py",
+           "peticion.py", "repo_config.py", "unidad.py", "workspace_paths.py")
 DECISIONES = (
     "README.md",
     "001-docs-fuera-del-repo.md",
@@ -151,6 +151,23 @@ def version_metodo():
     actualizar.py pueda decir "método x.y.z → a.b.c" en vez de comparar solo huellas.
     """
     return (PLANTILLA / "docs" / "00-metodo" / "VERSION").read_text(encoding="utf-8").strip()
+
+
+def origen_herramienta():
+    """La URL del repositorio de donde sale este método (el `origin` de esta copia).
+
+    Viaja al workspace en METODO.json (campo `origen`) porque es lo ÚNICO que necesita
+    para ponerse al día solo: con ella, `docs/00-metodo/scripts/herramienta.py` comprueba
+    la versión publicada y consigue la herramienta aunque en el disco no quede ni rastro
+    de ella. None si esta copia no tiene remoto (un zip, un clon sin origin): entonces el
+    workspace hereda el canal de siempre y no se inventa ninguna URL.
+    """
+    r = subprocess.run(["git", "-C", str(BASE.parent), "remote", "get-url", "origin"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if r.returncode:
+        return None
+    url = r.stdout.strip()
+    return url or None
 
 
 def esqueleto_congelado():
@@ -979,10 +996,13 @@ def main():
         encoding="utf-8")
     # La guía del humano (sin tecnicismos) y la CI del método
     (destino / "GUIA.md").write_text(generar_guia(titulo), encoding="utf-8")
+    metodo = {"formato": 1, "huella": huella_plantilla(), "version": version_metodo(),
+              "archivos": manifiesto_metodo()}
+    url_origen = origen_herramienta()
+    if url_origen:
+        metodo["origen"] = url_origen
     (destino / "METODO.json").write_text(
-        json.dumps({"formato": 1, "huella": huella_plantilla(), "version": version_metodo(),
-                    "archivos": manifiesto_metodo()},
-                   ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        json.dumps(metodo, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     (destino / ".github" / "workflows").mkdir(parents=True)

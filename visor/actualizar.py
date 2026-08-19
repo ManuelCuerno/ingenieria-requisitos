@@ -411,6 +411,16 @@ def version_workspace(workspace):
     return "sin versión"
 
 
+def origen_workspace(workspace):
+    """La URL del método que el workspace ya declara, si la declara."""
+    try:
+        datos = json.loads((Path(workspace) / "METODO.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    url = datos.get("origen") if isinstance(datos, dict) else None
+    return url.strip() if isinstance(url, str) and url.strip() else None
+
+
 def linea_version(workspace):
     actual, nueva = version_workspace(workspace), bootstrap.version_metodo()
     if actual == nueva:
@@ -889,11 +899,19 @@ def preparar_publicado(workspace, cambios, retirados, esperado, snapshot, sha, o
             )
             publicado[relativo] = (esperado[relativo].encode("utf-8"), modo)
         elif relativo == "METODO.json":
+            datos = {"formato": 1, "huella": bootstrap.huella_plantilla(),
+                     "actualizado": HOY, "version": bootstrap.version_metodo(),
+                     "archivos": bootstrap.manifiesto_metodo()}
+            # `origen` es lo que hace autosuficiente al workspace: con esa URL su
+            # herramienta.py comprueba y descarga el método sin depender de ninguna
+            # carpeta local. Se conserva la que ya tuviera (es SUYA, no de esta copia)
+            # y solo se repone cuando falta: los workspaces nacidos antes de que
+            # existiera el campo se vuelven autosuficientes en su primera actualización.
+            url_origen = origen_workspace(workspace) or bootstrap.origen_herramienta()
+            if url_origen:
+                datos["origen"] = url_origen
             metodo = json.dumps(
-                {"formato": 1, "huella": bootstrap.huella_plantilla(), "actualizado": HOY,
-                 "version": bootstrap.version_metodo(),
-                 "archivos": bootstrap.manifiesto_metodo()},
-                ensure_ascii=False, indent=2, sort_keys=True,
+                datos, ensure_ascii=False, indent=2, sort_keys=True,
             ) + "\n"
             publicado[relativo] = (metodo.encode("utf-8"), 0o644)
         elif relativo == HISTORIAL:

@@ -12,14 +12,14 @@ existe `.claude/personalidad.md`, aplícalo desde tu primera respuesta (CÓMO ha
 1. **Actualiza el taller:** ejecuta `setup.py` con el Python disponible. Esto coloca
    `main/` en la última `origin/main` mediante fast-forward; si no puede, PARA y explica
    por qué. Nunca trabajes desde una referencia remota antigua.
-2. **¿Hay método más nuevo? Avisa y sigue.** Salvo que `.claude/actualizaciones.md` diga
-   `preferencia: nunca`, ejecuta `python3 <herramienta>/visor/actualizar.py avisar <este
-   workspace>` con timeout corto (≤15 s); la ruta de la herramienta la anota ese fichero
-   (`herramienta: <ruta>`; anótala tú cuando la conozcas). Si anuncia versión nueva, dilo UNA
-   vez por sesión y ofrece: **sí** (`… aplicar <este workspace>`; confirma qué cambió) ·
-   **todos** (`… aplicar --todos`; lista cada resultado) · **no por ahora** · **nunca más**
-   (`… avisar <este workspace> --nunca`; queda fuera de lo que se actualiza). ¿Sin ruta,
-   fallo, tardanza, red o acceso (repo privado)? Arranca igual, sin aviso ni pedir nada.
+2. **¿Hay método más nuevo? Avisa y sigue.** Ejecuta `python3
+   docs/00-metodo/scripts/herramienta.py comprobar` (se corta solo: ≤15 s TODO el proceso, no por orden):
+   compara con el repo del método (`origen` de `METODO.json`) leyendo solo su fichero de versión, y calla
+   si `.claude/actualizaciones.md` dice `preferencia: nunca`. Si anuncia versión nueva, dilo UNA vez por
+   sesión y ofrece: **sí** (`… herramienta.py aplicar`: consigue la herramienta sola —tu clon si es del
+   mismo origen y está limpio; si no, una descarga temporal que jamás toca el tuyo— y confirma qué cambió) · **todos**
+   (`… aplicar --todos`) · **no por ahora** · **nunca más** (`… herramienta.py nunca`).
+   ¿Fallo, tardanza, red o acceso (repo privado)? Arranca igual, sin aviso ni pedir nada.
 3. **Linta el método:** `python3 docs/00-metodo/scripts/lint_metodo.py`. Un FAIL tuyo se
    arregla antes de seguir; uno causado por el método no te bloquea (regla 13, ADR-026).
 4. **Lee `docs/05-trabajo/ESTADO.md`**: dónde estamos, qué hay en vuelo y qué toca ahora.
