@@ -98,12 +98,16 @@ def montar_workspace():
     ):
         carpeta = trabajo / nombre
         carpeta.mkdir(parents=True)
-        (carpeta / "especificacion.md").write_text(texto, encoding="utf-8")
-    (trabajo / "ESTADO.md").write_text("# Estado\n", encoding="utf-8")
+        # newline="": el servidor sirve el fichero tal cual (R1), así que el
+        # fixture debe escribir los mismos bytes LF del literal Python en disco
+        # -- sin esto, Windows traduce \n a \r\n al escribir en modo texto y la
+        # comparación contra la constante (siempre \n) falla solo ahí.
+        (carpeta / "especificacion.md").write_text(texto, encoding="utf-8", newline="")
+    (trabajo / "ESTADO.md").write_text("# Estado\n", encoding="utf-8", newline="")
     (trabajo / "peticiones").mkdir()
     archivada = trabajo / "archivo" / "001-vieja"
     archivada.mkdir(parents=True)
-    (archivada / "especificacion.md").write_text(CONTRATO_008, encoding="utf-8")
+    (archivada / "especificacion.md").write_text(CONTRATO_008, encoding="utf-8", newline="")
     return raiz
 
 

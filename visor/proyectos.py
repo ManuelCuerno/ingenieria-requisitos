@@ -58,7 +58,16 @@ def bloqueo_registro():
             import msvcrt
 
             if os.fstat(descriptor).st_size == 0:
-                os.write(descriptor, b"0")
+                try:
+                    os.write(descriptor, b"0")
+                except PermissionError:
+                    # Windows aplica el candado de forma obligatoria (no solo
+                    # advisory como flock): si otro proceso vio el mismo tamaño
+                    # 0 justo antes que nosotros y ya escribió Y bloqueó el
+                    # byte 0, nuestro propio write cae aquí en vez de en el
+                    # bloqueo de más abajo. El fichero ya tiene su byte de
+                    # relleno gracias al otro proceso -- seguimos al candado.
+                    pass
             os.lseek(descriptor, 0, os.SEEK_SET)
             # LK_LOCK abandona a los ~10 s con EDEADLK; varios procesos registrando a
             # la vez pueden esperar más. Se sondea sin bloquear hasta un límite ancho.
