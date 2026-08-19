@@ -4,6 +4,11 @@ La versión del método viaja con cada proyecto (en su `METODO.json`). Para llev
 estas mejoras a tus proyectos ya creados: abre tu agente aquí y dile «pon al día
 mis proyectos».
 
+## 1.7.3 — 2026-08-19
+
+Publicación de prueba, pedida por Nate, para verificar el update en un workspace cliente.
+Sin ningún cambio de código.
+
 ## 1.7.2 — 2026-08-19
 
 Publicación de demostración, pedida por Nate, para ver en vivo el aviso-primero de la
