@@ -233,7 +233,12 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertRutaIgual(harness["cwd"], self.worktree.resolve())
         self.assertRutaIgual(harness["pwd"], self.worktree.resolve())
         self.assertEqual(harness["branch"], self.unidad)
-        self.assertEqual(harness["tmp_mode"], 0o700)
+        if os.name == "posix":
+            # Windows no tiene bits de permiso POSIX: os.chmod()/Path.mkdir(mode=)
+            # solo puede alternar de lectura, el resto de bits quedan en 0o777
+            # pase lo que pase (documentado en la stdlib). No hay invariante
+            # equivalente que comprobar ahí.
+            self.assertEqual(harness["tmp_mode"], 0o700)
         self.assertTrue(all(value is None for value in harness["poison"].values()))
         self.assertIn("--safe-mode", harness["argv"])
         self.assertIn("--disable-slash-commands", harness["argv"])
@@ -256,6 +261,17 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("--ephemeral", harness["argv"])
         self.assertNotIn("plugin-de-proceso", " ".join(harness["argv"]))
 
+    @unittest.skipIf(
+        os.name == "nt",
+        "el doble del harness en Windows se resuelve a un .bat (shutil.which no ve "
+        "ejecutables sin extensión PATHEXT): CreateProcess reenvía TODO .bat a través "
+        "de cmd.exe, que trocea su propia línea de invocación en el primer salto de "
+        "línea — y el ENCARGO que arma encargo() siempre es multilínea, con o sin "
+        "flags peligrosos en el prompt. Es un límite del fixture (no hay ejecutable "
+        "nativo barato que probar), no de ejecucion.py: la garantía real — argv como "
+        "lista, nunca shell=True — la siguen probando en Windows los tests que miran "
+        "flags sueltos en argv (--safe-mode, --add-dir) y la ausencia de /bin/sh y -c.",
+    )
     def test_prompt_con_flags_peligrosos_sigue_siendo_un_solo_argumento_literal(self):
         # Unidad 012: sin sandbox de SO de por medio, la garantía la da por completo
         # que ejecucion.py invoque argv como LISTA (subprocess.run, nunca shell=True):
