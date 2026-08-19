@@ -244,9 +244,14 @@ pathlib.Path('.harness-record.json').write_text(json.dumps(record))
         self.assertIn("--disable-slash-commands", harness["argv"])
         self.assertIn("--add-dir", harness["argv"])
         self.assertIn(str((self.ws / "docs/05-trabajo/001-demo").resolve()), harness["argv"])
-        prompt = harness["argv"][-1]
-        self.assertIn("CONTENIDO_TECNICO_PERMITIDO", prompt)
-        self.assertNotIn("CONTENIDO_PROCESO_PROHIBIDO", prompt)
+        if os.name == "posix":
+            # Mismo límite que test_prompt_con_flags_peligrosos...: en Windows el
+            # doble del harness es un .bat, y CreateProcess lo reenvía a través de
+            # cmd.exe, que trocea su línea de invocación en el primer salto de línea
+            # del ENCARGO (siempre multilínea) antes de que el propio .bat la vea.
+            prompt = harness["argv"][-1]
+            self.assertIn("CONTENIDO_TECNICO_PERMITIDO", prompt)
+            self.assertNotIn("CONTENIDO_PROCESO_PROHIBIDO", prompt)
 
     def test_codex_usa_home_efimero_y_no_descubre_plugins_instalados(self):
         resultado = self.ejecutar(harness="codex")
