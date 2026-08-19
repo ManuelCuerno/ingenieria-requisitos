@@ -106,7 +106,20 @@ def guardar(datos):
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(datos, f, ensure_ascii=False, indent=2, sort_keys=True)
             f.write("\n")
-        os.replace(temporal, REGISTRO)
+        # En Windows, os.replace() puede fallar con PermissionError transitorio
+        # (WinError 5) cuando algo externo al proceso -- típicamente el escaneo
+        # en tiempo real del antivirus -- retiene brevemente el fichero recién
+        # creado. Bajo el candado de bloqueo_registro() no hay otro proceso NUESTRO
+        # compitiendo por el destino, así que un reintento corto basta.
+        limite = time.monotonic() + 2
+        while True:
+            try:
+                os.replace(temporal, REGISTRO)
+                break
+            except PermissionError:
+                if os.name != "nt" or time.monotonic() >= limite:
+                    raise
+                time.sleep(0.05)
     finally:
         if os.path.exists(temporal):
             os.unlink(temporal)
